@@ -143,6 +143,9 @@ async function handleCallback(request, env) {
   if (callbackToken(request, url) !== env.CALLBACK_TOKEN) {
     return jsonResponse({ code: 401, msg: 'unauthorized' }, 401);
   }
+  if (request.method === 'GET') {
+    return jsonResponse({ code: 200, msg: 'success' });
+  }
   if (request.method !== 'POST') {
     return jsonResponse({ code: 405, msg: 'method not allowed' }, 405);
   }
