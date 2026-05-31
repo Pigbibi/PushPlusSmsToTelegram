@@ -2,7 +2,7 @@
 
 把 PushPlus 收到的短信转发到 Telegram Bot。适合“硬件短信转发器只能推 PushPlus，但你还想在 Telegram 里实时查看短信”的场景。
 
-默认方案是 GitHub Actions 每 5 分钟轮询 PushPlus OpenAPI。公开仓库里不会保存短信正文、验证码、PushPlus `shortCode` 或 Telegram token；去重状态只保存用 `STATE_SECRET` 做 HMAC 后的消息 ID。
+推荐方案是 Cloudflare Worker 主动接收 PushPlus 的消息完成回调，再用回调里的 `shortCode` 拉取消息详情并转发 Telegram。这样不需要轮询，平时没有短信就没有请求。仓库同时保留 GitHub Actions 轮询方案作为备用。
 
 ## 转发内容
 
@@ -13,6 +13,66 @@ Telegram 消息包含：
 - 短信发送时间；
 - PushPlus 收到时间；
 - 完整短信内容，不脱敏。
+
+## 推荐方案：Cloudflare Worker 主动触发
+
+PushPlus 官方支持消息完成回调：消息真正推送完成后，会把包含 `shortCode` 和 `sendStatus` 的 JSON POST 到你配置的回调地址。这个 Worker 使用 `shortCode` 拉取 PushPlus 消息详情，再转发到 Telegram。
+
+### Cloudflare 免费吗？
+
+这类低频短信转发通常可以放在 Cloudflare Workers 免费计划内。Cloudflare 官方文档写明 Workers Free 有每天 100,000 次请求限制，Workers KV 也包含免费额度。短信回调一天几十次以内远低于这个量。
+
+### 部署步骤
+
+```bash
+cp wrangler.example.toml wrangler.toml
+npx wrangler kv namespace create FORWARDED_KV
+# 把输出的 id 填入 wrangler.toml
+
+npx wrangler secret put CALLBACK_TOKEN
+npx wrangler secret put TELEGRAM_BOT_TOKEN
+npx wrangler secret put TELEGRAM_CHAT_ID
+npx wrangler secret put STATE_SECRET
+
+npx wrangler deploy
+```
+
+`CALLBACK_TOKEN` 用随机长字符串，`STATE_SECRET` 可以这样生成：
+
+```bash
+openssl rand -hex 32
+```
+
+部署后，把 PushPlus 回调地址设置为：
+
+```text
+https://你的-worker.workers.dev/pushplus/callback?token=你的CALLBACK_TOKEN
+```
+
+也可以先访问健康检查：
+
+```text
+https://你的-worker.workers.dev/health
+```
+
+### Worker Secrets
+
+| Secret | 说明 |
+| --- | --- |
+| `CALLBACK_TOKEN` | 保护回调入口，放在 PushPlus 回调 URL 的 `token` 参数里。 |
+| `TELEGRAM_BOT_TOKEN` | Telegram BotFather 创建的 bot token。 |
+| `TELEGRAM_CHAT_ID` | 接收消息的 chat id。 |
+| `STATE_SECRET` | 随机长字符串，用于生成 KV 去重 key。 |
+
+### Worker Variables
+
+| Variable | 默认值 | 说明 |
+| --- | --- | --- |
+| `MESSAGE_BODY_KEYWORD` | 空 | 正文过滤。只转发短信时可填 `#SMS`；只转发电信可填 `10001`。 |
+
+## 备用方案：GitHub Actions 轮询
+
+如果暂时不部署 Cloudflare Worker，也可以用 GitHub Actions 每 5 分钟轮询 PushPlus。
 
 ## GitHub 配置
 
@@ -66,9 +126,9 @@ GitHub Actions：
 
 ## 自动触发还是轮询？
 
-如果硬件短信转发器只能推 PushPlus，那么 PushPlus 不会主动回调这个仓库里的 GitHub Actions，所以这里采用轮询。GitHub Actions 的定时任务设置为每 5 分钟一次，实际触发时间可能有延迟。
+优先用 Cloudflare Worker 主动回调。PushPlus 的消息回调只带 `shortCode` 和发送状态，不直接带完整正文，所以 Worker 收到回调后还会访问一次 `/shortMessage/{shortCode}` 获取完整内容。
 
-如果你需要更接近实时，可以后续改成 Cloudflare Workers Cron Triggers 或 VPS 常驻进程。Cloudflare Workers 免费额度通常足够每分钟轮询一次这类低频短信转发，但需要额外配置 Worker secrets 和 KV / D1 等状态存储。
+GitHub Actions 轮询只是备用方案。它不需要 Cloudflare，但会定时运行，实时性也差一些。
 
 ## 安全说明
 

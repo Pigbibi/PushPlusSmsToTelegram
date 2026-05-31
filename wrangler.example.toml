@@ -1,0 +1,11 @@
+name = "pushplus-sms-to-telegram"
+main = "worker.js"
+compatibility_date = "2026-06-01"
+
+# Non-sensitive filters. Secrets must be set with `wrangler secret put`.
+[vars]
+MESSAGE_BODY_KEYWORD = "#SMS"
+
+[[kv_namespaces]]
+binding = "FORWARDED_KV"
+id = "replace-with-your-kv-namespace-id"
