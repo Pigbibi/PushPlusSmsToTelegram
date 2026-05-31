@@ -45,7 +45,7 @@ openssl rand -hex 32
 部署后，把 PushPlus 回调地址设置为：
 
 ```text
-https://你的-worker.workers.dev/pushplus/callback?token=你的CALLBACK_TOKEN
+https://你的-worker.workers.dev/pushplus/callback/你的CALLBACK_TOKEN
 ```
 
 这个地址支持带 token 的 GET 校验，并按 PushPlus 要求返回 `{'code': 200, 'msg': 'success'}`；正式消息回调仍然按 PushPlus 文档处理 POST。也可以先访问健康检查：
@@ -58,7 +58,7 @@ https://你的-worker.workers.dev/health
 
 | Secret | 说明 |
 | --- | --- |
-| `CALLBACK_TOKEN` | 保护回调入口，放在 PushPlus 回调 URL 的 `token` 参数里。 |
+| `CALLBACK_TOKEN` | 保护回调入口，放在 PushPlus 回调 URL 路径末尾。 |
 | `TELEGRAM_BOT_TOKEN` | Telegram BotFather 创建的 bot token。 |
 | `TELEGRAM_CHAT_ID` | 接收消息的 chat id。 |
 | `STATE_SECRET` | 随机长字符串，用于生成 KV 去重 key。 |

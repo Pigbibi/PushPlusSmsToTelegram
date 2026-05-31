@@ -136,6 +136,10 @@ function requireEnv(env, name) {
 function callbackToken(request, url) {
   const auth = request.headers.get('authorization') || '';
   if (auth.toLowerCase().startsWith('bearer ')) return auth.slice(7).trim();
+  const pathPrefix = '/pushplus/callback/';
+  if (url.pathname.startsWith(pathPrefix)) {
+    return decodeURIComponent(url.pathname.slice(pathPrefix.length));
+  }
   return url.searchParams.get('token') || '';
 }
 
@@ -189,7 +193,7 @@ export default {
     if (request.method === 'GET' && url.pathname === '/health') {
       return jsonResponse({ code: 200, msg: 'ok' });
     }
-    if (url.pathname === '/pushplus/callback') {
+    if (url.pathname === '/pushplus/callback' || url.pathname.startsWith('/pushplus/callback/')) {
       try {
         return await handleCallback(request, env);
       } catch (err) {
