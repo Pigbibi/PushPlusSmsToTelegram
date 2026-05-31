@@ -9,10 +9,10 @@ function jsonResponse(body, status = 200) {
 }
 
 function pushPlusSuccessResponse() {
-  return new Response('{"code": 200, "msg": "success"}', {
+  return new Response(" {'code': 200, 'msg': 'success'}", {
     status: 200,
     headers: {
-      'content-type': 'application/json; charset=utf-8',
+      'content-type': 'text/plain; charset=utf-8',
       'access-control-allow-origin': '*',
       'access-control-allow-methods': 'GET, HEAD, POST, OPTIONS',
       'access-control-allow-headers': 'content-type, authorization',
