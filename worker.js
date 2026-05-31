@@ -9,9 +9,14 @@ function jsonResponse(body, status = 200) {
 }
 
 function pushPlusSuccessResponse() {
-  return new Response("{'code': 200, 'msg': 'success'}", {
+  return new Response('{"code": 200, "msg": "success"}', {
     status: 200,
-    headers: { 'content-type': 'text/plain; charset=utf-8' },
+    headers: {
+      'content-type': 'application/json; charset=utf-8',
+      'access-control-allow-origin': '*',
+      'access-control-allow-methods': 'GET, HEAD, POST, OPTIONS',
+      'access-control-allow-headers': 'content-type, authorization',
+    },
   });
 }
 
@@ -151,7 +156,7 @@ async function handleCallback(request, env) {
   if (!env.FORWARDED_KV) throw new Error('Missing KV binding: FORWARDED_KV');
 
   const url = new URL(request.url);
-  if (request.method === 'GET' || request.method === 'HEAD') {
+  if (request.method === 'GET' || request.method === 'HEAD' || request.method === 'OPTIONS') {
     return pushPlusSuccessResponse();
   }
   if (request.method !== 'POST') {
