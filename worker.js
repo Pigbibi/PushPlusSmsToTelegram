@@ -151,10 +151,7 @@ async function handleCallback(request, env) {
   if (!env.FORWARDED_KV) throw new Error('Missing KV binding: FORWARDED_KV');
 
   const url = new URL(request.url);
-  if (callbackToken(request, url) !== env.CALLBACK_TOKEN) {
-    return jsonResponse({ code: 401, msg: 'unauthorized' }, 401);
-  }
-  if (request.method === 'GET') {
+  if (request.method === 'GET' || request.method === 'HEAD') {
     return pushPlusSuccessResponse();
   }
   if (request.method !== 'POST') {
@@ -167,6 +164,9 @@ async function handleCallback(request, env) {
   const sendStatus = Number(messageInfo.sendStatus ?? payload.sendStatus ?? 2);
   if (!shortCode) return pushPlusSuccessResponse();
   if (sendStatus !== 2) return pushPlusSuccessResponse();
+  if (callbackToken(request, url) !== env.CALLBACK_TOKEN) {
+    return jsonResponse({ code: 401, msg: 'unauthorized' }, 401);
+  }
 
   const key = await dedupeKey(shortCode, env);
   if (await env.FORWARDED_KV.get(key)) {

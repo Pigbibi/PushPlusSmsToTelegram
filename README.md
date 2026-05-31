@@ -48,7 +48,7 @@ openssl rand -hex 32
 https://你的-worker.workers.dev/pushplus/callback/你的CALLBACK_TOKEN
 ```
 
-这个地址支持带 token 的 GET 校验，并按 PushPlus 要求返回 `{'code': 200, 'msg': 'success'}`；正式消息回调仍然按 PushPlus 文档处理 POST。也可以先访问健康检查：
+这个地址支持 PushPlus 保存时的 GET/空 POST 校验，并按 PushPlus 要求返回 `{'code': 200, 'msg': 'success'}`；真正带 `shortCode` 的消息回调仍会校验路径末尾的 `CALLBACK_TOKEN`。也可以先访问健康检查：
 
 ```text
 https://你的-worker.workers.dev/health
