@@ -148,40 +148,31 @@ function callbackToken(request, url) {
   return url.searchParams.get('token') || '';
 }
 
-async function handleCallback(request, env) {
+async function processCallback(request, env, url) {
   requireEnv(env, 'CALLBACK_TOKEN');
   requireEnv(env, 'TELEGRAM_BOT_TOKEN');
   requireEnv(env, 'TELEGRAM_CHAT_ID');
   requireEnv(env, 'STATE_SECRET');
   if (!env.FORWARDED_KV) throw new Error('Missing KV binding: FORWARDED_KV');
 
-  const url = new URL(request.url);
-  if (request.method === 'GET' || request.method === 'HEAD' || request.method === 'OPTIONS') {
-    return pushPlusSuccessResponse();
-  }
-  if (request.method !== 'POST') {
-    return jsonResponse({ code: 405, msg: 'method not allowed' }, 405);
-  }
-
   const payload = await request.json().catch(() => ({}));
   const messageInfo = payload.messageInfo || {};
   const shortCode = messageInfo.shortCode || payload.shortCode || '';
   const sendStatus = Number(messageInfo.sendStatus ?? payload.sendStatus ?? 2);
-  if (!shortCode) return pushPlusSuccessResponse();
-  if (sendStatus !== 2) return pushPlusSuccessResponse();
+  if (!shortCode) return;
+  if (sendStatus !== 2) return;
   if (callbackToken(request, url) !== env.CALLBACK_TOKEN) {
-    return jsonResponse({ code: 401, msg: 'unauthorized' }, 401);
+    console.warn('PushPlus callback token mismatch; skipped');
+    return;
   }
 
   const key = await dedupeKey(shortCode, env);
-  if (await env.FORWARDED_KV.get(key)) {
-    return pushPlusSuccessResponse();
-  }
+  if (await env.FORWARDED_KV.get(key)) return;
 
   const text = await fetchPushPlusDetail(shortCode);
   if (env.MESSAGE_BODY_KEYWORD && !text.includes(env.MESSAGE_BODY_KEYWORD)) {
     await env.FORWARDED_KV.put(key, 'ignored', { expirationTtl: 60 * 60 * 24 * 30 });
-    return pushPlusSuccessResponse();
+    return;
   }
 
   const message = { title: payload.title || '短信转发', text };
@@ -189,18 +180,27 @@ async function handleCallback(request, env) {
     await sendTelegram({ env, text: chunk });
   }
   await env.FORWARDED_KV.put(key, new Date().toISOString(), { expirationTtl: 60 * 60 * 24 * 180 });
+}
+
+function handleCallback(request, env, ctx) {
+  if (request.method === 'POST') {
+    const url = new URL(request.url);
+    ctx.waitUntil(processCallback(request.clone(), env, url).catch(err => {
+      console.error(`PushPlus callback processing failed: ${err.message}`);
+    }));
+  }
   return pushPlusSuccessResponse();
 }
 
 export default {
-  async fetch(request, env) {
+  async fetch(request, env, ctx) {
     const url = new URL(request.url);
     if (request.method === 'GET' && url.pathname === '/health') {
       return jsonResponse({ code: 200, msg: 'ok' });
     }
     if (url.pathname === '/pushplus/callback' || url.pathname.startsWith('/pushplus/callback/')) {
       try {
-        return await handleCallback(request, env);
+        return handleCallback(request, env, ctx);
       } catch (err) {
         console.error(err.message);
         return jsonResponse({ code: 500, msg: 'internal error' }, 500);
