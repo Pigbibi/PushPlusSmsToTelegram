@@ -8,6 +8,13 @@ function jsonResponse(body, status = 200) {
   });
 }
 
+function pushPlusSuccessResponse() {
+  return new Response("{'code': 200, 'msg': 'success'}", {
+    status: 200,
+    headers: { 'content-type': 'text/plain; charset=utf-8' },
+  });
+}
+
 function decodeHtmlEntities(text) {
   return String(text || '')
     .replace(/&#(\d+);/g, (_, code) => String.fromCodePoint(Number(code)))
@@ -144,7 +151,7 @@ async function handleCallback(request, env) {
     return jsonResponse({ code: 401, msg: 'unauthorized' }, 401);
   }
   if (request.method === 'GET') {
-    return jsonResponse({ code: 200, msg: 'success' });
+    return pushPlusSuccessResponse();
   }
   if (request.method !== 'POST') {
     return jsonResponse({ code: 405, msg: 'method not allowed' }, 405);
@@ -154,18 +161,18 @@ async function handleCallback(request, env) {
   const messageInfo = payload.messageInfo || {};
   const shortCode = messageInfo.shortCode || payload.shortCode || '';
   const sendStatus = Number(messageInfo.sendStatus ?? payload.sendStatus ?? 2);
-  if (!shortCode) return jsonResponse({ code: 200, msg: 'success', skipped: 'missing shortCode' });
-  if (sendStatus !== 2) return jsonResponse({ code: 200, msg: 'success', skipped: `sendStatus=${sendStatus}` });
+  if (!shortCode) return pushPlusSuccessResponse();
+  if (sendStatus !== 2) return pushPlusSuccessResponse();
 
   const key = await dedupeKey(shortCode, env);
   if (await env.FORWARDED_KV.get(key)) {
-    return jsonResponse({ code: 200, msg: 'success', skipped: 'duplicate' });
+    return pushPlusSuccessResponse();
   }
 
   const text = await fetchPushPlusDetail(shortCode);
   if (env.MESSAGE_BODY_KEYWORD && !text.includes(env.MESSAGE_BODY_KEYWORD)) {
     await env.FORWARDED_KV.put(key, 'ignored', { expirationTtl: 60 * 60 * 24 * 30 });
-    return jsonResponse({ code: 200, msg: 'success', skipped: 'body filter' });
+    return pushPlusSuccessResponse();
   }
 
   const message = { title: payload.title || '短信转发', text };
@@ -173,7 +180,7 @@ async function handleCallback(request, env) {
     await sendTelegram({ env, text: chunk });
   }
   await env.FORWARDED_KV.put(key, new Date().toISOString(), { expirationTtl: 60 * 60 * 24 * 180 });
-  return jsonResponse({ code: 200, msg: 'success' });
+  return pushPlusSuccessResponse();
 }
 
 export default {
