@@ -183,8 +183,16 @@ async function processCallback(request, env, url) {
 }
 
 function handleCallback(request, env, ctx) {
+  const url = new URL(request.url);
+  console.log(JSON.stringify({
+    event: 'pushplus_callback_request',
+    method: request.method,
+    pathKind: url.pathname.startsWith('/pushplus/callback/') ? 'path-token' : 'base',
+    hasQueryToken: url.searchParams.has('token'),
+    contentType: request.headers.get('content-type') || '',
+    userAgent: request.headers.get('user-agent') || '',
+  }));
   if (request.method === 'POST') {
-    const url = new URL(request.url);
     ctx.waitUntil(processCallback(request.clone(), env, url).catch(err => {
       console.error(`PushPlus callback processing failed: ${err.message}`);
     }));
