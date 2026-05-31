@@ -1,6 +1,6 @@
 name = "pushplus-sms-to-telegram"
 main = "worker.js"
-compatibility_date = "2026-06-01"
+compatibility_date = "2026-05-31"
 
 # Non-sensitive filters. Secrets must be set with `wrangler secret put`.
 [vars]

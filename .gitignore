@@ -4,3 +4,4 @@ node_modules/
 .state/
 .DS_Store
 wrangler.toml
+.wrangler/
