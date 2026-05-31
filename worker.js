@@ -206,6 +206,9 @@ export default {
     if (request.method === 'GET' && url.pathname === '/health') {
       return jsonResponse({ code: 200, msg: 'ok' });
     }
+    if (url.pathname === '/') {
+      return pushPlusSuccessResponse();
+    }
     if (url.pathname === '/pushplus/callback' || url.pathname.startsWith('/pushplus/callback/')) {
       try {
         return handleCallback(request, env, ctx);
