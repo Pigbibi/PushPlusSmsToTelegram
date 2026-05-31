@@ -1,0 +1,87 @@
+name: Forward PushPlus SMS to Telegram
+
+on:
+  schedule:
+    - cron: "*/5 * * * *"
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Do not send Telegram messages; still updates state for matching messages"
+        required: false
+        default: "false"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: pushplus-sms-to-telegram
+  cancel-in-progress: false
+
+jobs:
+  forward:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      PUSHPLUS_TOKEN: ${{ secrets.PUSHPLUS_TOKEN }}
+      PUSHPLUS_SECRET_KEY: ${{ secrets.PUSHPLUS_SECRET_KEY }}
+      TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+      TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+      STATE_SECRET: ${{ secrets.STATE_SECRET }}
+      PUSHPLUS_PAGE_SIZE: ${{ vars.PUSHPLUS_PAGE_SIZE || '20' }}
+      MESSAGE_TITLE_KEYWORD: ${{ vars.MESSAGE_TITLE_KEYWORD || '' }}
+      MESSAGE_BODY_KEYWORD: ${{ vars.MESSAGE_BODY_KEYWORD || '' }}
+      POLL_LOOKBACK_MINUTES: ${{ vars.POLL_LOOKBACK_MINUTES || '60' }}
+      DRY_RUN: ${{ github.event.inputs.dry_run || 'false' }}
+      STATE_FILE: .state/forwarded.json
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - run: npm ci
+      - run: npm test
+      - run: npm run lint
+
+      - name: Restore forwarded state
+        run: |
+          set -euo pipefail
+          mkdir -p .state
+          if git ls-remote --exit-code --heads origin state >/dev/null 2>&1; then
+            git fetch origin state:refs/remotes/origin/state
+            git show origin/state:forwarded.json > .state/forwarded.json || echo '{"forwarded":[]}' > .state/forwarded.json
+          else
+            echo '{"forwarded":[]}' > .state/forwarded.json
+          fi
+
+      - name: Forward messages
+        run: npm run forward
+
+      - name: Persist forwarded state
+        if: success()
+        run: |
+          set -euo pipefail
+          tmpdir="$(mktemp -d)"
+          cp .state/forwarded.json "$tmpdir/forwarded.json"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          if git ls-remote --exit-code --heads origin state >/dev/null 2>&1; then
+            git fetch origin state:refs/remotes/origin/state
+            git switch --detach origin/state
+          else
+            git switch --orphan state
+            git rm -rf . >/dev/null 2>&1 || true
+          fi
+          cp "$tmpdir/forwarded.json" forwarded.json
+          git add forwarded.json
+          if git diff --cached --quiet; then
+            echo "No forwarded state changes."
+          else
+            git commit -m "Update forwarded state"
+            git push origin HEAD:state
+          fi
