@@ -66,7 +66,6 @@ function buildTelegramText(message) {
     `标题：${escapeTelegramHtml(message.title || '-')}`,
     `发件人：${escapeTelegramHtml(fields.sender || '-')}`,
     `短信时间：${escapeTelegramHtml(fields.sentAt || '-')}`,
-    `PushPlus shortCode：${escapeTelegramHtml(message.shortCode || '-')}`,
     '',
     '<b>完整内容：</b>',
     escapeTelegramHtml(message.text || ''),
@@ -166,7 +165,7 @@ async function handleCallback(request, env) {
     return jsonResponse({ code: 200, msg: 'success', skipped: 'body filter' });
   }
 
-  const message = { shortCode, title: payload.title || '短信转发', text };
+  const message = { title: payload.title || '短信转发', text };
   for (const chunk of splitTelegramText(buildTelegramText(message))) {
     await sendTelegram({ env, text: chunk });
   }

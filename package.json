@@ -10,6 +10,6 @@
   "scripts": {
     "forward": "node src/forward.js",
     "test": "node --test",
-    "lint": "node --check src/*.js && node --check tests/*.js"
+    "lint": "node --check src/*.js && node --check tests/*.js && node --input-type=module --check < worker.js"
   }
 }

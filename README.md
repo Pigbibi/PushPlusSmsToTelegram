@@ -2,7 +2,7 @@
 
 把 PushPlus 收到的短信转发到 Telegram Bot。适合“硬件短信转发器只能推 PushPlus，但你还想在 Telegram 里实时查看短信”的场景。
 
-推荐方案是 Cloudflare Worker 主动接收 PushPlus 的消息完成回调，再用回调里的 `shortCode` 拉取消息详情并转发 Telegram。这样不需要轮询，平时没有短信就没有请求。仓库同时保留 GitHub Actions 轮询方案作为备用。
+推荐方案是 Cloudflare Worker 主动接收 PushPlus 的消息完成回调，再用回调里的 `shortCode` 拉取消息详情并转发 Telegram。这样不需要 GitHub Actions 定时轮询，平时没有短信就没有 Worker 请求。仓库同时保留 GitHub Actions 轮询方案作为备用。
 
 ## 转发内容
 
@@ -11,7 +11,6 @@ Telegram 消息包含：
 - PushPlus 标题；
 - 发件人，例如 `10001`；
 - 短信发送时间；
-- PushPlus 收到时间；
 - 完整短信内容，不脱敏。
 
 ## 推荐方案：Cloudflare Worker 主动触发
@@ -128,7 +127,7 @@ GitHub Actions：
 
 优先用 Cloudflare Worker 主动回调。PushPlus 的消息回调只带 `shortCode` 和发送状态，不直接带完整正文，所以 Worker 收到回调后还会访问一次 `/shortMessage/{shortCode}` 获取完整内容。
 
-GitHub Actions 轮询只是备用方案。它不需要 Cloudflare，但会定时运行，实时性也差一些。
+GitHub Actions 轮询只是备用方案。它不需要 Cloudflare，但会定时运行，实时性也差一些。如果已经部署 Worker，可以在 GitHub 仓库的 Actions 页面禁用 `Forward PushPlus SMS to Telegram` workflow，避免备用轮询继续跑。
 
 ## 安全说明
 
