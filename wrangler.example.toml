@@ -5,6 +5,12 @@ compatibility_date = "2026-05-31"
 # Non-sensitive filters. Secrets must be set with `wrangler secret put`.
 [vars]
 MESSAGE_BODY_KEYWORD = "#SMS"
+MESSAGE_TITLE_KEYWORD = "短信转发"
+PUSHPLUS_PAGE_SIZE = "20"
+POLL_LOOKBACK_MINUTES = "60"
+
+[triggers]
+crons = ["*/5 * * * *"]
 
 [[kv_namespaces]]
 binding = "FORWARDED_KV"

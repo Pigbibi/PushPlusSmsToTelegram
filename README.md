@@ -2,7 +2,12 @@
 
 把 PushPlus 收到的短信转发到 Telegram Bot。适合“硬件短信转发器只能推 PushPlus，但你还想在 Telegram 里实时查看短信”的场景。
 
-推荐方案是 Cloudflare Worker 主动接收 PushPlus 的消息完成回调，再用回调里的 `shortCode` 拉取消息详情并转发 Telegram。这样不需要 GitHub Actions 定时轮询，平时没有短信就没有 Worker 请求。仓库同时保留 GitHub Actions 轮询方案作为备用。
+推荐方案是 Cloudflare Worker。它同时支持两种模式：
+
+1. PushPlus 消息完成回调：PushPlus 回调里带 `shortCode`，Worker 拉取消息详情并转发 Telegram。
+2. Cloudflare Cron 轮询：如果发送端只能配置 PushPlus 用户 token，不能给每条 `/send` 请求传 `callbackUrl`，Worker 会按计划任务用 PushPlus 开放接口读取最近消息并转发。
+
+仓库同时保留 GitHub Actions 轮询方案作为备用。
 
 ## 转发内容
 
@@ -29,6 +34,8 @@ npx wrangler kv namespace create FORWARDED_KV
 # 把输出的 id 填入 wrangler.toml
 
 npx wrangler secret put CALLBACK_TOKEN
+npx wrangler secret put PUSHPLUS_TOKEN
+npx wrangler secret put PUSHPLUS_SECRET_KEY
 npx wrangler secret put TELEGRAM_BOT_TOKEN
 npx wrangler secret put TELEGRAM_CHAT_ID
 npx wrangler secret put STATE_SECRET
@@ -54,11 +61,21 @@ https://你的-worker.workers.dev/pushplus/callback/你的CALLBACK_TOKEN
 https://你的-worker.workers.dev/health
 ```
 
+如果 PushPlus 回调地址无法保存，或者短信转发器只支持配置 PushPlus 用户 token，那么不用配置 PushPlus 回调地址也可以运行：`wrangler.toml` 里的 Cron 会定时触发 Worker，用 `PUSHPLUS_TOKEN` + `PUSHPLUS_SECRET_KEY` 获取 AccessKey，再读取最近消息并转发。
+
+也可以用下面的受保护地址手动触发一次轮询：
+
+```text
+https://你的-worker.workers.dev/poll?token=你的CALLBACK_TOKEN
+```
+
 ### Worker Secrets
 
 | Secret | 说明 |
 | --- | --- |
 | `CALLBACK_TOKEN` | 保护回调入口，放在 PushPlus 回调 URL 路径末尾。 |
+| `PUSHPLUS_TOKEN` | PushPlus 用户 token，用于 Cron 轮询模式。 |
+| `PUSHPLUS_SECRET_KEY` | PushPlus 开放接口 secretKey，用于 Cron 轮询模式获取 AccessKey。 |
 | `TELEGRAM_BOT_TOKEN` | Telegram BotFather 创建的 bot token。 |
 | `TELEGRAM_CHAT_ID` | 接收消息的 chat id。 |
 | `STATE_SECRET` | 随机长字符串，用于生成 KV 去重 key。 |
@@ -68,6 +85,9 @@ https://你的-worker.workers.dev/health
 | Variable | 默认值 | 说明 |
 | --- | --- | --- |
 | `MESSAGE_BODY_KEYWORD` | 空 | 正文过滤。只转发短信时可填 `#SMS`；只转发电信可填 `10001`。 |
+| `MESSAGE_TITLE_KEYWORD` | 空 | 标题过滤。硬件标题固定为“短信转发”时建议填 `短信转发`。 |
+| `PUSHPLUS_PAGE_SIZE` | `20` | Cron 轮询每次读取最近多少条 PushPlus 消息，最大 50。 |
+| `POLL_LOOKBACK_MINUTES` | `60` | Cron 轮询只处理最近多少分钟的消息。 |
 
 ## 备用方案：GitHub Actions 轮询
 
