@@ -65,6 +65,51 @@ function parseSmsFields(text) {
   };
 }
 
+function isLabeledLine(line, labels) {
+  return labels.some(label => {
+    const escaped = label.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    return new RegExp(`^${escaped}\\s*[:：]`).test(line);
+  });
+}
+
+function extractSmsContent(text) {
+  const lines = String(text || '')
+    .split(/\r?\n/)
+    .map(line => line.trim())
+    .filter(Boolean);
+  const metadataLabels = [
+    '标题',
+    '链接',
+    '发件号码',
+    '发信号码',
+    '发送号码',
+    '发件时间',
+    '发信时间',
+    '发送时间',
+    '本机号码',
+    '开机时长',
+    '运营商',
+    '信号',
+    'sender',
+    'from',
+    'sentAt',
+    'time',
+  ];
+  const contentLines = [];
+  for (const line of lines) {
+    if (/^#SMS\b/i.test(line)) {
+      if (contentLines.length) break;
+      continue;
+    }
+    if (isLabeledLine(line, metadataLabels)) {
+      if (contentLines.length) break;
+      continue;
+    }
+    contentLines.push(line);
+  }
+  return contentLines.join('\n');
+}
+
 function escapeTelegramHtml(text) {
   return String(text || '')
     .replace(/&/g, '&amp;')
@@ -74,14 +119,14 @@ function escapeTelegramHtml(text) {
 
 function buildTelegramText(message) {
   const fields = parseSmsFields(message.text);
+  const smsContent = extractSmsContent(message.text);
   return [
     '📩 <b>PushPlus SMS</b>',
-    `标题：${escapeTelegramHtml(message.title || '-')}`,
     `发件人：${escapeTelegramHtml(fields.sender || '-')}`,
-    `短信时间：${escapeTelegramHtml(fields.sentAt || '-')}`,
+    `发件时间：${escapeTelegramHtml(fields.sentAt || '-')}`,
     '',
-    '<b>完整内容：</b>',
-    escapeTelegramHtml(message.text || ''),
+    '<b>短信内容：</b>',
+    escapeTelegramHtml(smsContent || '-'),
   ].join('\n');
 }
 

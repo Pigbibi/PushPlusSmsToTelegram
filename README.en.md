@@ -2,7 +2,7 @@
 
 English | [简体中文](README.md)
 
-Actively forward SMS messages received by PushPlus to a Telegram bot. This is useful when an SMS forwarding device can only send to PushPlus, but you want to receive the full SMS content or verification codes in Telegram in near real time.
+Actively forward SMS messages received by PushPlus to a Telegram bot. This is useful when an SMS forwarding device can only send to PushPlus, but you want to receive SMS content or verification codes in Telegram in near real time.
 
 Recommended flow:
 
@@ -15,7 +15,7 @@ This is event-driven: **Cloudflare is called only when PushPlus receives a new m
 ## Features
 
 - Active webhook forwarding without fixed polling delay;
-- Telegram messages include title, sender, SMS time, and full body;
+- Telegram messages show only sender, SMS sent time, and SMS content;
 - Optional title/body keyword filters;
 - KV-based deduplication to avoid forwarding the same PushPlus message twice;
 - Manual GitHub Actions fallback for backfill/debugging, disabled by default for schedules;
@@ -42,10 +42,11 @@ If you use a custom Worker domain that PushPlus can reach, you can skip the rela
 
 The Telegram message contains:
 
-- PushPlus title;
 - sender, for example `10001`;
 - SMS sent time;
-- full SMS body, without redaction.
+- SMS content, without redaction.
+
+PushPlus title, short links, `#SMS`, local phone number, uptime, carrier, signal strength, and other device metadata are hidden automatically.
 
 ## Deploy the Cloudflare Worker
 
@@ -191,5 +192,5 @@ This callback contains `shortCode` and delivery status only. It does not include
 
 - Never commit tokens, secretKeys, Telegram bot tokens, chat ids, or cookies;
 - The public `state` branch stores only HMAC deduplication ids, not SMS bodies or PushPlus `shortCode` values;
-- Telegram receives full SMS content, including verification codes. Make sure the bot and chat are trusted;
+- Telegram receives SMS content, including verification codes. Make sure the bot and chat are trusted;
 - If any credential was exposed in chat, logs, or screenshots, rotate it and update the corresponding platform configuration.

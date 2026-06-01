@@ -2,7 +2,7 @@
 
 [English](README.en.md) | 简体中文
 
-把 PushPlus 收到的短信**主动**转发到 Telegram Bot。适合“短信转发器只能推到 PushPlus，但你希望在 Telegram 里实时接收完整短信/验证码”的场景。
+把 PushPlus 收到的短信**主动**转发到 Telegram Bot。适合“短信转发器只能推到 PushPlus，但你希望在 Telegram 里实时接收短信内容/验证码”的场景。
 
 当前推荐链路：
 
@@ -15,7 +15,7 @@
 ## 功能
 
 - 主动 webhook 转发，无固定轮询延迟；
-- Telegram 消息包含标题、发件人、短信时间和完整正文；
+- Telegram 消息只展示发件人、发件时间和短信内容；
 - 支持正文/标题关键字过滤；
 - KV 去重，避免同一条 PushPlus 消息重复转发；
 - 保留 GitHub Actions 手动补发脚本，默认不定时运行；
@@ -42,10 +42,11 @@ Relay 不保存短信内容，也不需要 Telegram token。
 
 转发到 Telegram 的消息包含：
 
-- PushPlus 标题；
 - 发件人，例如 `10001`；
 - 短信发送时间；
-- 完整短信正文，不脱敏。
+- 短信内容，不脱敏。
+
+PushPlus 标题、短链接、`#SMS`、本机号码、开机时长、运营商、信号等设备元数据会被自动隐藏。
 
 ## Cloudflare Worker 部署
 
@@ -191,5 +192,5 @@ https://你的-worker.workers.dev/pushplus/callback/你的CALLBACK_TOKEN
 
 - 不要把 token、secretKey、Telegram bot token、chat id 写进仓库文件；
 - 公开仓库的 `state` 分支只保存 HMAC 后的去重 ID，不保存短信正文和 PushPlus `shortCode`；
-- Telegram 会收到完整短信，包括验证码，请确认 bot 和 chat 的访问范围可信；
+- Telegram 会收到短信内容，包括验证码，请确认 bot 和 chat 的访问范围可信；
 - 如果凭证曾在聊天、日志或截图中暴露，建议重新生成并更新对应平台配置。
