@@ -1,0 +1,52 @@
+name: Deploy active PushPlus relay
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: pushplus-sms-to-telegram-deploy
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      CALLBACK_TOKEN: ${{ secrets.CALLBACK_TOKEN }}
+      RELAY_TOKEN: ${{ secrets.RELAY_TOKEN }}
+      PUSHPLUS_TOKEN: ${{ secrets.PUSHPLUS_TOKEN }}
+      PUSHPLUS_SECRET_KEY: ${{ secrets.PUSHPLUS_SECRET_KEY }}
+      PUSHPLUS_WEBHOOK_URL: https://pushplus-sms-to-telegram.pages.dev/pushplus/webhook/${{ secrets.RELAY_TOKEN }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - run: npm ci
+      - run: npm test
+      - run: npm run lint
+
+      - name: Deploy Worker
+        run: |
+          set -euo pipefail
+          printf '%s' "$CALLBACK_TOKEN" | npx wrangler secret put CALLBACK_TOKEN
+          npx wrangler deploy
+
+      - name: Deploy Pages relay
+        run: |
+          set -euo pipefail
+          npx wrangler pages project create pushplus-sms-to-telegram --production-branch main --compatibility-date 2026-05-31 || true
+          cd pages-relay
+          printf '%s' "$RELAY_TOKEN" | npx wrangler pages secret put RELAY_TOKEN --project-name pushplus-sms-to-telegram
+          npx wrangler pages deploy dist --project-name pushplus-sms-to-telegram --branch main --commit-dirty=true
+
+      - name: Configure PushPlus webhook
+        run: npm run configure:pushplus

@@ -10,6 +10,7 @@
   "scripts": {
     "forward": "node src/forward.js",
     "test": "node --test",
-    "lint": "node --check src/*.js && node --check tests/*.js && node --input-type=module --check < worker.js"
+    "lint": "node --check src/*.js && node --check scripts/*.js && node --check tests/*.js && node --input-type=module --check < worker.js && node --input-type=module --check < pages-relay/dist/_worker.js",
+    "configure:pushplus": "node scripts/configure-pushplus-webhook.js"
   }
 }

@@ -1,7 +1,5 @@
 const PUSHPLUS_BASE_URL = 'https://www.pushplus.plus';
 const TELEGRAM_MAX_LENGTH = 3900;
-const DEFAULT_POLL_PAGE_SIZE = 20;
-const DEFAULT_POLL_LOOKBACK_MINUTES = 60;
 const FORWARDED_TTL_SECONDS = 60 * 60 * 24 * 180;
 
 function jsonResponse(body, status = 200) {
@@ -118,91 +116,11 @@ function pushPlusUrl(env, pathname) {
   return new URL(pathname, base);
 }
 
-function numericEnv(env, name, fallback) {
-  const value = env[name];
-  if (value === undefined || value === null || value === '') return fallback;
-  const parsed = Number(value);
-  return Number.isFinite(parsed) ? parsed : fallback;
-}
-
-function parsePushPlusUpdateTime(value) {
-  if (value === undefined || value === null || value === '') return 0;
-  if (typeof value === 'number') return value < 1e12 ? value * 1000 : value;
-  const text = String(value).trim();
-  if (/^\d+$/.test(text)) {
-    const timestamp = Number(text);
-    return timestamp < 1e12 ? timestamp * 1000 : timestamp;
-  }
-  if (/([zZ]|[+-]\d\d:?\d\d)$/.test(text)) {
-    const parsed = Date.parse(text);
-    return Number.isNaN(parsed) ? 0 : parsed;
-  }
-  const match = text.match(/^(\d{4})-(\d{2})-(\d{2})[ T](\d{2}):(\d{2})(?::(\d{2}))?/);
-  if (match) {
-    const [, year, month, day, hour, minute, second = '0'] = match;
-    return Date.UTC(Number(year), Number(month) - 1, Number(day), Number(hour) - 8, Number(minute), Number(second));
-  }
-  const parsed = Date.parse(text);
-  return Number.isNaN(parsed) ? 0 : parsed;
-}
-
 async function fetchPushPlusDetail(env, shortCode) {
   const url = pushPlusUrl(env, `/shortMessage/${encodeURIComponent(shortCode)}`);
   const res = await fetch(url, { headers: { accept: 'text/html, text/plain;q=0.9, */*;q=0.8' } });
   if (!res.ok) throw new Error(`PushPlus detail HTTP ${res.status}`);
   return htmlToText(await res.text());
-}
-
-async function getPushPlusAccessKey(env) {
-  requireEnv(env, 'PUSHPLUS_TOKEN');
-  requireEnv(env, 'PUSHPLUS_SECRET_KEY');
-  const res = await fetch(pushPlusUrl(env, '/api/common/openApi/getAccessKey'), {
-    method: 'POST',
-    headers: { 'content-type': 'application/json', accept: 'application/json' },
-    body: JSON.stringify({
-      token: env.PUSHPLUS_TOKEN,
-      secretKey: env.PUSHPLUS_SECRET_KEY,
-    }),
-  });
-  if (!res.ok) throw new Error(`PushPlus access key HTTP ${res.status}`);
-  const data = await res.json().catch(() => ({}));
-  const accessKey = data?.data?.accessKey;
-  if (data?.code !== 200 || !accessKey) {
-    throw new Error(`PushPlus access key request failed: ${data?.msg || 'unknown error'}`);
-  }
-  return accessKey;
-}
-
-async function listPushPlusMessages(env, accessKey) {
-  const pageSize = Math.max(1, Math.min(numericEnv(env, 'PUSHPLUS_PAGE_SIZE', DEFAULT_POLL_PAGE_SIZE), 50));
-  const res = await fetch(pushPlusUrl(env, '/api/open/message/list'), {
-    method: 'POST',
-    headers: {
-      'content-type': 'application/json',
-      accept: 'application/json',
-      'access-key': accessKey,
-    },
-    body: JSON.stringify({ current: 1, pageSize }),
-  });
-  if (!res.ok) throw new Error(`PushPlus message list HTTP ${res.status}`);
-  const data = await res.json().catch(() => ({}));
-  if (data?.code !== 200) throw new Error(`PushPlus message list failed: ${data?.msg || 'unknown error'}`);
-  return data?.data?.list || [];
-}
-
-async function getPushPlusSendResult(env, accessKey, shortCode) {
-  const url = pushPlusUrl(env, '/api/open/message/sendMessageResult');
-  url.searchParams.set('shortCode', shortCode);
-  const res = await fetch(url, {
-    headers: {
-      accept: 'application/json',
-      'access-key': accessKey,
-    },
-  });
-  if (!res.ok) throw new Error(`PushPlus send result HTTP ${res.status}`);
-  const data = await res.json().catch(() => ({}));
-  if (data?.code !== 200) throw new Error(`PushPlus send result failed: ${data?.msg || 'unknown error'}`);
-  return data?.data || {};
 }
 
 async function sendTelegram({ env, text }) {
@@ -233,12 +151,20 @@ async function forwardPushPlusMessage(env, message) {
   requireEnv(env, 'STATE_SECRET');
   if (!env.FORWARDED_KV) throw new Error('Missing KV binding: FORWARDED_KV');
 
-  const shortCode = message.shortCode || '';
-  if (!shortCode) return false;
-  const key = await dedupeKey(shortCode, env);
+  const sourceId = message.sourceId || message.shortCode || message.url || await sha256Hex(`${message.title || ''}\n${message.text || ''}`);
+  if (!sourceId) return false;
+  const key = await dedupeKey(sourceId, env);
   if (await env.FORWARDED_KV.get(key)) return false;
 
-  const text = await fetchPushPlusDetail(env, shortCode);
+  let text = message.text || '';
+  if (!text && message.shortCode) {
+    text = await fetchPushPlusDetail(env, message.shortCode);
+  }
+  if (!text) return false;
+  if (env.MESSAGE_TITLE_KEYWORD && !String(message.title || '').includes(env.MESSAGE_TITLE_KEYWORD)) {
+    await env.FORWARDED_KV.put(key, 'ignored', { expirationTtl: 60 * 60 * 24 * 30 });
+    return false;
+  }
   if (env.MESSAGE_BODY_KEYWORD && !text.includes(env.MESSAGE_BODY_KEYWORD)) {
     await env.FORWARDED_KV.put(key, 'ignored', { expirationTtl: 60 * 60 * 24 * 30 });
     return false;
@@ -252,39 +178,32 @@ async function forwardPushPlusMessage(env, message) {
   return true;
 }
 
-async function pollPushPlusMessages(env) {
-  requireEnv(env, 'PUSHPLUS_TOKEN');
-  requireEnv(env, 'PUSHPLUS_SECRET_KEY');
-  const accessKey = await getPushPlusAccessKey(env);
-  const items = await listPushPlusMessages(env, accessKey);
-  const lookbackMinutes = numericEnv(env, 'POLL_LOOKBACK_MINUTES', DEFAULT_POLL_LOOKBACK_MINUTES);
-  const cutoff = lookbackMinutes > 0 ? Date.now() - lookbackMinutes * 60 * 1000 : 0;
-  let matched = 0;
-  let forwarded = 0;
-
-  for (const item of items) {
-    if (!item?.shortCode) continue;
-    if (env.MESSAGE_TITLE_KEYWORD && !String(item.title || '').includes(env.MESSAGE_TITLE_KEYWORD)) continue;
-    const receivedAt = parsePushPlusUpdateTime(item.updateTime);
-    if (cutoff && receivedAt && receivedAt < cutoff) continue;
-    const result = await getPushPlusSendResult(env, accessKey, item.shortCode);
-    if (Number(result.status ?? 2) !== 2) continue;
-
-    matched += 1;
-    if (await forwardPushPlusMessage(env, item)) forwarded += 1;
-  }
-
-  return { scanned: items.length, matched, forwarded };
-}
-
 function callbackToken(request, url) {
   const auth = request.headers.get('authorization') || '';
   if (auth.toLowerCase().startsWith('bearer ')) return auth.slice(7).trim();
-  const pathPrefix = '/pushplus/callback/';
-  if (url.pathname.startsWith(pathPrefix)) {
-    return decodeURIComponent(url.pathname.slice(pathPrefix.length));
+  for (const pathPrefix of ['/pushplus/callback/', '/pushplus/webhook/']) {
+    if (url.pathname.startsWith(pathPrefix)) {
+      return decodeURIComponent(url.pathname.slice(pathPrefix.length));
+    }
   }
   return url.searchParams.get('token') || '';
+}
+
+function shortCodeFromUrl(url) {
+  const match = String(url || '').match(/\/shortMessage\/([^/?#]+)/);
+  return match ? decodeURIComponent(match[1]) : '';
+}
+
+async function parseWebhookPayload(request) {
+  const contentType = request.headers.get('content-type') || '';
+  const raw = await request.text();
+  if (contentType.includes('application/json')) {
+    return JSON.parse(raw || '{}');
+  }
+  if (contentType.includes('application/x-www-form-urlencoded')) {
+    return Object.fromEntries(new URLSearchParams(raw));
+  }
+  return { content: raw };
 }
 
 async function processCallback(request, env, url) {
@@ -305,6 +224,28 @@ async function processCallback(request, env, url) {
     return;
   }
   await forwardPushPlusMessage(env, { shortCode, title: payload.title || '短信转发' });
+}
+
+async function processWebhook(request, env, url) {
+  requireEnv(env, 'CALLBACK_TOKEN');
+  if (callbackToken(request, url) !== env.CALLBACK_TOKEN) {
+    return jsonResponse({ code: 401, msg: 'unauthorized' }, 401);
+  }
+  if (request.method !== 'POST') return pushPlusSuccessResponse();
+
+  const payload = await parseWebhookPayload(request);
+  const content = payload.content || payload.text || payload.message || '';
+  const title = payload.title || payload.messageTitle || pickField(content, ['标题', 'title']) || '短信转发';
+  const urlValue = payload.url || payload.messageUrl || pickField(content, ['链接', 'url']) || '';
+  const text = htmlToText(content);
+  await forwardPushPlusMessage(env, {
+    sourceId: payload.shortCode || shortCodeFromUrl(urlValue) || urlValue,
+    shortCode: payload.shortCode || shortCodeFromUrl(urlValue),
+    title,
+    text,
+    url: urlValue,
+  });
+  return pushPlusSuccessResponse();
 }
 
 function handleCallback(request, env, ctx) {
@@ -334,17 +275,6 @@ export default {
     if (url.pathname === '/') {
       return pushPlusSuccessResponse();
     }
-    if (url.pathname === '/poll') {
-      if (callbackToken(request, url) !== env.CALLBACK_TOKEN) {
-        return jsonResponse({ code: 401, msg: 'unauthorized' }, 401);
-      }
-      try {
-        return jsonResponse({ code: 200, msg: 'success', data: await pollPushPlusMessages(env) });
-      } catch (err) {
-        console.error(err.message);
-        return jsonResponse({ code: 500, msg: 'internal error' }, 500);
-      }
-    }
     if (url.pathname === '/pushplus/callback' || url.pathname.startsWith('/pushplus/callback/')) {
       try {
         return handleCallback(request, env, ctx);
@@ -353,13 +283,14 @@ export default {
         return jsonResponse({ code: 500, msg: 'internal error' }, 500);
       }
     }
+    if (url.pathname === '/pushplus/webhook' || url.pathname.startsWith('/pushplus/webhook/')) {
+      try {
+        return await processWebhook(request, env, url);
+      } catch (err) {
+        console.error(err.message);
+        return jsonResponse({ code: 500, msg: 'internal error' }, 500);
+      }
+    }
     return jsonResponse({ code: 404, msg: 'not found' }, 404);
-  },
-  scheduled(event, env, ctx) {
-    ctx.waitUntil(pollPushPlusMessages(env).then(result => {
-      console.log(JSON.stringify({ event: 'pushplus_poll', ...result }));
-    }).catch(err => {
-      console.error(`PushPlus poll failed: ${err.message}`);
-    }));
   },
 };
