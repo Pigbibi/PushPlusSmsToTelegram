@@ -316,7 +316,7 @@ function requireEnv(env, name) {
 }
 
 function inboxAuthToken(env) {
-  return env.INBOX_TOKEN || env.CALLBACK_TOKEN || '';
+  return env.INBOX_TOKEN || '';
 }
 
 function authorizeInboxRequest(request, env, url) {
@@ -332,7 +332,8 @@ async function storeInboxMessage(env, message) {
   const text = message.text || '';
   if (!text) return;
   const fields = parseSmsFields(text);
-  const receivedAt = Number(message.receivedAt || Date.now());
+  const timestamp = Number(message.receivedAt);
+  const receivedAt = Number.isFinite(timestamp) ? timestamp : Date.now();
   const sourceId = message.sourceId || message.shortCode || message.url || await sha256Hex(`${message.title || ''}\n${text}`);
   await env.FORWARDED_KV.put(await inboxKey(sourceId, receivedAt, env), JSON.stringify({
     id: sourceId,

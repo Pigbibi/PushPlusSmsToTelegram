@@ -48,6 +48,7 @@ npx wrangler secret put CALLBACK_TOKEN
 npx wrangler secret put TELEGRAM_BOT_TOKEN
 npx wrangler secret put TELEGRAM_CHAT_ID
 npx wrangler secret put STATE_SECRET
+npx wrangler secret put INBOX_TOKEN  # only needed if you use the protected /messages inbox
 ```
 
 Use long random values for `CALLBACK_TOKEN` and `STATE_SECRET`:
@@ -210,7 +211,7 @@ Required repository secrets:
 | `FORWARDED_KV_NAMESPACE_ID` | Cloudflare KV namespace id for `FORWARDED_KV`. |
 | `CALLBACK_TOKEN` | Worker webhook token. |
 | `RELAY_TOKEN` | Pages relay token. |
-| `INBOX_TOKEN` | Optional token for the short-lived `/messages` inbox. Falls back to `CALLBACK_TOKEN` if omitted. |
+| `INBOX_TOKEN` | Token for the short-lived `/messages` inbox. Required only when using that inbox; if omitted, `/messages` returns unauthorized. |
 | `TELEGRAM_BOT_TOKEN` | Telegram bot token used by the Worker for non-silenced messages. |
 | `TELEGRAM_CHAT_ID` | Telegram chat id used by the Worker for non-silenced messages. |
 | `STATE_SECRET` | Random string used to generate Worker KV deduplication keys. |
