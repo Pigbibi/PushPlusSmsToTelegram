@@ -1,6 +1,7 @@
 const PUSHPLUS_BASE_URL = 'https://www.pushplus.plus';
 const TELEGRAM_MAX_LENGTH = 3900;
 const FORWARDED_TTL_SECONDS = 60 * 60 * 24 * 180;
+const INBOX_TTL_SECONDS = 60 * 60 * 6;
 
 function jsonResponse(body, status = 200) {
   return new Response(JSON.stringify(body), {
@@ -135,12 +136,14 @@ function telecomClaimPresetRules(env) {
     {
       name: 'telecom-claim-login',
       action: 'silence',
+      store: true,
       senderIncludes: sender,
       textIncludesAll: ['验证码', '感谢使用北京电信掌上营业厅'],
     },
     {
       name: 'telecom-claim-confirm',
       action: 'silence',
+      store: true,
       senderIncludes: sender,
       textIncludesAll: confirmTextIncludes,
     },
@@ -173,6 +176,14 @@ function findInterceptRule(message, env) {
 
 function interceptAction(rule) {
   return String(rule?.action || 'silence').toLowerCase();
+}
+
+function interceptShouldStore(rule) {
+  return rule?.store === true || /store/.test(interceptAction(rule));
+}
+
+function interceptShouldSilence(rule) {
+  return /silence/.test(interceptAction(rule));
 }
 
 function isLabeledLine(line, labels) {
@@ -265,6 +276,10 @@ async function dedupeKey(shortCode, env) {
   return `pushplus:${await sha256Hex(`${env.STATE_SECRET || ''}:${shortCode}`)}`;
 }
 
+async function inboxKey(sourceId, receivedAt, env) {
+  return `inbox:${String(receivedAt || Date.now()).padStart(13, '0')}:${await sha256Hex(`${env.STATE_SECRET || ''}:${sourceId}`)}`;
+}
+
 function pushPlusUrl(env, pathname) {
   const baseUrl = env.PUSHPLUS_BASE_URL || PUSHPLUS_BASE_URL;
   const base = baseUrl.endsWith('/') ? baseUrl : `${baseUrl}/`;
@@ -300,6 +315,58 @@ function requireEnv(env, name) {
   if (!env[name]) throw new Error(`Missing env: ${name}`);
 }
 
+function inboxAuthToken(env) {
+  return env.INBOX_TOKEN || env.CALLBACK_TOKEN || '';
+}
+
+function authorizeInboxRequest(request, env, url) {
+  const expected = inboxAuthToken(env);
+  if (!expected) return false;
+  const auth = request.headers.get('authorization') || '';
+  if (auth.toLowerCase().startsWith('bearer ') && auth.slice(7).trim() === expected) return true;
+  return url.searchParams.get('token') === expected;
+}
+
+async function storeInboxMessage(env, message) {
+  if (!env.FORWARDED_KV) throw new Error('Missing KV binding: FORWARDED_KV');
+  const text = message.text || '';
+  if (!text) return;
+  const fields = parseSmsFields(text);
+  const receivedAt = Number(message.receivedAt || Date.now());
+  const sourceId = message.sourceId || message.shortCode || message.url || await sha256Hex(`${message.title || ''}\n${text}`);
+  await env.FORWARDED_KV.put(await inboxKey(sourceId, receivedAt, env), JSON.stringify({
+    id: sourceId,
+    sender: fields.sender || '',
+    text,
+    receivedAt,
+    title: message.title || '',
+  }), { expirationTtl: INBOX_TTL_SECONDS });
+}
+
+async function processMessages(request, env, url) {
+  requireEnv(env, 'STATE_SECRET');
+  if (!env.FORWARDED_KV) throw new Error('Missing KV binding: FORWARDED_KV');
+  if (!authorizeInboxRequest(request, env, url)) {
+    return jsonResponse({ code: 401, msg: 'unauthorized' }, 401);
+  }
+
+  const since = Number(url.searchParams.get('since') || 0);
+  const sender = url.searchParams.get('sender') || '';
+  const limit = Math.max(1, Math.min(Number(url.searchParams.get('limit') || 30), 100));
+  const list = await env.FORWARDED_KV.list({ prefix: 'inbox:' });
+  const messages = [];
+  for (const key of list.keys) {
+    const raw = await env.FORWARDED_KV.get(key.name);
+    if (!raw) continue;
+    const msg = JSON.parse(raw);
+    if (since && Number(msg.receivedAt || 0) < since) continue;
+    if (sender && !String(msg.sender || msg.text || '').includes(sender)) continue;
+    messages.push(msg);
+  }
+  messages.sort((a, b) => Number(b.receivedAt || 0) - Number(a.receivedAt || 0));
+  return jsonResponse({ messages: messages.slice(0, limit) });
+}
+
 async function forwardPushPlusMessage(env, message) {
   requireEnv(env, 'STATE_SECRET');
   if (!env.FORWARDED_KV) throw new Error('Missing KV binding: FORWARDED_KV');
@@ -315,9 +382,14 @@ async function forwardPushPlusMessage(env, message) {
   }
   if (!text) return false;
   const interceptRule = findInterceptRule({ ...message, text }, env);
-  if (interceptRule && interceptAction(interceptRule) === 'silence') {
-    await env.FORWARDED_KV.put(key, `intercept:${interceptRule.name || 'silence'}`, { expirationTtl: FORWARDED_TTL_SECONDS });
-    return false;
+  if (interceptRule) {
+    if (interceptShouldStore(interceptRule)) {
+      await storeInboxMessage(env, { ...message, text });
+    }
+    if (interceptShouldSilence(interceptRule)) {
+      await env.FORWARDED_KV.put(key, `intercept:${interceptRule.name || 'silence'}`, { expirationTtl: FORWARDED_TTL_SECONDS });
+      return false;
+    }
   }
 
   if (env.MESSAGE_TITLE_KEYWORD && !String(message.title || '').includes(env.MESSAGE_TITLE_KEYWORD)) {
@@ -445,6 +517,14 @@ export default {
     if (url.pathname === '/pushplus/webhook' || url.pathname.startsWith('/pushplus/webhook/')) {
       try {
         return await processWebhook(request, env, url);
+      } catch (err) {
+        console.error(err.message);
+        return jsonResponse({ code: 500, msg: 'internal error' }, 500);
+      }
+    }
+    if (url.pathname === '/messages' || url.pathname === '/pushplus/messages') {
+      try {
+        return await processMessages(request, env, url);
       } catch (err) {
         console.error(err.message);
         return jsonResponse({ code: 500, msg: 'internal error' }, 500);

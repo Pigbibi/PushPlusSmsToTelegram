@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 const { fetchRecentMessages } = require('./pushplus');
 const { loadState, saveState, messageId, hasForwarded, markForwarded } = require('./state');
-const { findInterceptRule, interceptAction, loadInterceptRules } = require('./interceptors');
+const { findInterceptRule, interceptShouldSilence, loadInterceptRules } = require('./interceptors');
 const { buildTelegramText, splitTelegramText, parseSmsFields } = require('./text');
 const { sendTelegramMessage } = require('./telegram');
 
@@ -59,7 +59,7 @@ async function main() {
 
     const fields = parseSmsFields(message.text);
     const interceptRule = findInterceptRule(message, config.interceptRules);
-    if (interceptRule && interceptAction(interceptRule) === 'silence') {
+    if (interceptRule && interceptShouldSilence(interceptRule)) {
       console.log(`Silencing message by intercept rule ${JSON.stringify({
         rule: interceptRule.name || 'unnamed',
         title: message.title,

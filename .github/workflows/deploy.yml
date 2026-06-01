@@ -19,6 +19,7 @@ jobs:
       CALLBACK_TOKEN: ${{ secrets.CALLBACK_TOKEN }}
       RELAY_TOKEN: ${{ secrets.RELAY_TOKEN }}
       FORWARDED_KV_NAMESPACE_ID: ${{ secrets.FORWARDED_KV_NAMESPACE_ID }}
+      INBOX_TOKEN: ${{ secrets.INBOX_TOKEN }}
       TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
       TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
       STATE_SECRET: ${{ secrets.STATE_SECRET }}
@@ -74,6 +75,9 @@ jobs:
           path.write_text(text)
           PY
           printf '%s' "$CALLBACK_TOKEN" | npx wrangler secret put CALLBACK_TOKEN
+          if [ -n "${INBOX_TOKEN:-}" ]; then
+            printf '%s' "$INBOX_TOKEN" | npx wrangler secret put INBOX_TOKEN
+          fi
           if [ -n "${TELEGRAM_BOT_TOKEN:-}" ]; then
             printf '%s' "$TELEGRAM_BOT_TOKEN" | npx wrangler secret put TELEGRAM_BOT_TOKEN
           fi

@@ -66,12 +66,14 @@ function telecomClaimPresetRules(env = {}) {
     {
       name: 'telecom-claim-login',
       action: 'silence',
+      store: true,
       senderIncludes: sender,
       textIncludesAll: ['验证码', '感谢使用北京电信掌上营业厅'],
     },
     {
       name: 'telecom-claim-confirm',
       action: 'silence',
+      store: true,
       senderIncludes: sender,
       textIncludesAll: confirmTextIncludes,
     },
@@ -108,10 +110,20 @@ function interceptAction(rule) {
   return String(rule?.action || 'silence').toLowerCase();
 }
 
+function interceptShouldStore(rule) {
+  return rule?.store === true || /store/.test(interceptAction(rule));
+}
+
+function interceptShouldSilence(rule) {
+  return /silence/.test(interceptAction(rule));
+}
+
 module.exports = {
   compactText,
   findInterceptRule,
   interceptAction,
+  interceptShouldSilence,
+  interceptShouldStore,
   loadInterceptRules,
   messageMatchesRule,
   telecomClaimPresetRules,

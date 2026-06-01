@@ -9,7 +9,7 @@ This project is intended for setups where an SMS forwarding device can send mess
 - Receives PushPlus custom webhook requests and forwards matching SMS content to Telegram.
 - Uses Cloudflare Worker KV to deduplicate messages before sending them.
 - Supports optional title/body filters and configurable intercept rules before Telegram notification.
-- Can silence selected SMS classes, such as verification codes consumed by another automation, without storing SMS bodies in KV.
+- Can silence selected SMS classes, such as verification codes consumed by another automation, and optionally store only those matches in a short-lived protected inbox.
 - Sends a concise Telegram message with sender, SMS time, and SMS body when no intercept rule silences the message.
 - Includes a Cloudflare Pages relay for environments where PushPlus cannot reach a `workers.dev` endpoint directly.
 - Keeps a manual GitHub Actions backfill workflow for debugging or one-off historical forwarding.
@@ -164,6 +164,8 @@ Custom rule example:
 ]
 ```
 
+Set `action` to `silence` to suppress Telegram notification. Set `store: true` to additionally write the match into the protected inbox. If you want a custom rule to store but still notify, use `action: "store"`; if you want to store and suppress notification, use `action: "silence-store"` or `action: "silence"` with `store: true`.
+
 Supported match fields:
 
 - `sender` / `senderIncludes`
@@ -173,7 +175,14 @@ Supported match fields:
 
 `SMS_INTERCEPT_PRESETS=telecom-claim-silent` is a built-in convenience preset for Beijing Telecom monthly-claim verification SMS. It is disabled by default so the open-source default remains a general PushPlus-to-Telegram forwarder.
 
-This integration does not store SMS bodies in Worker KV; only the deduplication key is written. The SMS body remains in PushPlus until PushPlus expires or deletes it.
+Rules can also set `store: true` or use an action containing `store` to write matching SMS into a short-lived, token-protected inbox. The built-in `telecom-claim-silent` preset stores matches for up to 6 hours so another workflow can fetch them from:
+
+```text
+GET /messages?since=...&sender=10001
+Authorization: Bearer <INBOX_TOKEN>
+```
+
+Without `store`, only the deduplication key is written. With `store`, the matching SMS body is temporarily stored in Worker KV and expires automatically.
 
 ## Telegram message format
 
@@ -201,6 +210,7 @@ Required repository secrets:
 | `FORWARDED_KV_NAMESPACE_ID` | Cloudflare KV namespace id for `FORWARDED_KV`. |
 | `CALLBACK_TOKEN` | Worker webhook token. |
 | `RELAY_TOKEN` | Pages relay token. |
+| `INBOX_TOKEN` | Optional token for the short-lived `/messages` inbox. Falls back to `CALLBACK_TOKEN` if omitted. |
 | `TELEGRAM_BOT_TOKEN` | Telegram bot token used by the Worker for non-silenced messages. |
 | `TELEGRAM_CHAT_ID` | Telegram chat id used by the Worker for non-silenced messages. |
 | `STATE_SECRET` | Random string used to generate Worker KV deduplication keys. |
@@ -251,7 +261,7 @@ That callback contains `shortCode` and delivery status only. It does not include
 
 - Never commit tokens, secret keys, Telegram bot tokens, chat ids, cookies, or personal SMS content.
 - Telegram receives the SMS content, including verification codes. Use a trusted bot and chat.
-- The Worker stores only HMAC-based deduplication keys in KV, not SMS bodies or PushPlus `shortCode` values. Silenced intercept matches are also stored as deduplication keys only.
+- The Worker normally stores only HMAC-based deduplication keys in KV, not SMS bodies or PushPlus `shortCode` values. Intercept rules with `store` enabled temporarily store matching SMS bodies in KV for the protected inbox.
 - Rotate credentials if they were exposed in chat, logs, screenshots, or repository history.
 - Keep `wrangler.toml` local if it contains account-specific settings. Use `wrangler.example.toml` as the shareable template.
 

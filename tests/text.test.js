@@ -9,6 +9,8 @@ const {
 } = require('../src/text');
 const {
   findInterceptRule,
+  interceptShouldSilence,
+  interceptShouldStore,
   loadInterceptRules,
   messageMatchesRule,
 } = require('../src/interceptors');
@@ -88,6 +90,8 @@ test('matches Beijing Telecom login SMS with optional preset interceptor', () =>
   }));
   assert.equal(rule.name, 'telecom-claim-login');
   assert.equal(rule.action, 'silence');
+  assert.equal(interceptShouldSilence(rule), true);
+  assert.equal(interceptShouldStore(rule), true);
 });
 
 test('matches Beijing Telecom confirmation SMS with preset product and plan checks', () => {
@@ -128,4 +132,8 @@ test('matches custom JSON intercept rule', () => {
 
   assert.equal(messageMatchesRule('验证码：111111\n发件号码: 95588', rule), true);
   assert.equal(messageMatchesRule('余额变动提醒\n发件号码: 95588', rule), false);
+  assert.equal(interceptShouldSilence(rule), true);
+  assert.equal(interceptShouldStore(rule), false);
+  assert.equal(interceptShouldSilence({ action: 'store' }), false);
+  assert.equal(interceptShouldStore({ action: 'silence-store' }), true);
 });
