@@ -101,6 +101,7 @@ function buildTelegramText(message) {
     '📩 <b>PushPlus SMS</b>',
     `发件人：${escapeTelegramHtml(fields.sender || '-')}`,
     `发件时间：${escapeTelegramHtml(fields.sentAt || '-')}`,
+    '',
     '<b>短信内容：</b>',
     escapeTelegramHtml(smsContent || '-'),
   ];

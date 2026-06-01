@@ -53,8 +53,7 @@ test('builds concise Telegram HTML message with SMS content only', () => {
   });
   assert.equal(text.includes('发件人：10001'), true);
   assert.equal(text.includes('发件时间：2026/06/01 02:51:43'), true);
-  assert.equal(text.includes('发件时间：2026/06/01 02:51:43\n<b>短信内容：</b>'), true);
-  assert.equal(text.includes('发件时间：2026/06/01 02:51:43\n\n<b>短信内容：</b>'), false);
+  assert.equal(text.includes('发件时间：2026/06/01 02:51:43\n\n<b>短信内容：</b>'), true);
   assert.equal(text.includes('<b>短信内容：</b>'), true);
   assert.equal(text.includes('验证码：406560。'), true);
   assert.equal(text.includes('标题：'), false);
