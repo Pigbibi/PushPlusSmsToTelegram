@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 const { fetchRecentMessages } = require('./pushplus');
 const { loadState, saveState, messageId, hasForwarded, markForwarded } = require('./state');
+const { findInterceptRule, interceptAction, loadInterceptRules } = require('./interceptors');
 const { buildTelegramText, splitTelegramText, parseSmsFields } = require('./text');
 const { sendTelegramMessage } = require('./telegram');
 
@@ -40,6 +41,7 @@ function loadConfig() {
     stateFile: env('STATE_FILE', '.state/forwarded.json'),
     stateSecret: requireEnv('STATE_SECRET'),
     dryRun: env('DRY_RUN', 'false').toLowerCase() === 'true',
+    interceptRules: loadInterceptRules(process.env),
   };
 }
 
@@ -50,11 +52,27 @@ async function main() {
   console.log(`Fetched ${messages.length} PushPlus message(s) after filters.`);
 
   let forwarded = 0;
+  let silenced = 0;
   for (const message of messages) {
     const id = messageId(message, config.stateSecret);
     if (hasForwarded(state, id)) continue;
 
     const fields = parseSmsFields(message.text);
+    const interceptRule = findInterceptRule(message, config.interceptRules);
+    if (interceptRule && interceptAction(interceptRule) === 'silence') {
+      console.log(`Silencing message by intercept rule ${JSON.stringify({
+        rule: interceptRule.name || 'unnamed',
+        title: message.title,
+        updateTime: message.updateTime,
+        sender: fields.sender || '',
+        sentAt: fields.sentAt || '',
+        textLength: message.text.length,
+      })}`);
+      markForwarded(state, id);
+      silenced += 1;
+      continue;
+    }
+
     console.log(`Forwarding message ${JSON.stringify({
       title: message.title,
       updateTime: message.updateTime,
@@ -74,7 +92,7 @@ async function main() {
   }
 
   saveState(config.stateFile, state);
-  console.log(`Forwarded ${forwarded} new message(s).`);
+  console.log(`Forwarded ${forwarded} new message(s), silenced ${silenced} intercepted message(s).`);
 }
 
 main().catch(err => {

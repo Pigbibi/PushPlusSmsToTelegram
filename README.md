@@ -8,8 +8,9 @@ This project is intended for setups where an SMS forwarding device can send mess
 
 - Receives PushPlus custom webhook requests and forwards matching SMS content to Telegram.
 - Uses Cloudflare Worker KV to deduplicate messages before sending them.
-- Supports optional title and body keyword filters.
-- Sends a concise Telegram message with sender, SMS time, and SMS body.
+- Supports optional title/body filters and configurable intercept rules before Telegram notification.
+- Can silence selected SMS classes, such as verification codes consumed by another automation, without storing SMS bodies in KV.
+- Sends a concise Telegram message with sender, SMS time, and SMS body when no intercept rule silences the message.
 - Includes a Cloudflare Pages relay for environments where PushPlus cannot reach a `workers.dev` endpoint directly.
 - Keeps a manual GitHub Actions backfill workflow for debugging or one-off historical forwarding.
 
@@ -114,6 +115,8 @@ npm run configure:pushplus
 
 The script redacts the webhook URL in output and does not print token values.
 
+By default, `npm run configure:pushplus` also sets the user-token default channel to this webhook. According to PushPlus, messages without an explicit `channel` use the configured default channel, so this may replace the normal WeChat/App PushPlus notification with webhook delivery. If your sender can explicitly choose channels and you want to keep the normal PushPlus notification, set `PUSHPLUS_SET_USER_DEFAULT=false` and send through PushPlus multi-channel delivery instead.
+
 ## Configuration
 
 ### Worker secrets
@@ -138,6 +141,39 @@ The script redacts the webhook URL in output and does not print token values.
 | `MESSAGE_BODY_KEYWORD` | empty | Forward only messages whose body contains this value. Use `#SMS` if your forwarder marks SMS messages that way. |
 | `MESSAGE_TITLE_KEYWORD` | empty | Forward only messages whose title contains this value. For example, use `短信转发` if your device always uses that title. |
 | `PUSHPLUS_BASE_URL` | `https://www.pushplus.plus` | Override the PushPlus base URL used by callback compatibility mode. |
+| `SMS_INTERCEPT_PRESETS` | empty | Comma-separated built-in intercept presets. Currently supports `telecom-claim-silent`. |
+| `SMS_INTERCEPT_RULES` | empty | JSON object or array of custom intercept rules. Matching rules with `action: "silence"` are marked as handled and are not sent to Telegram. |
+| `TELECOM_SMS_SENDER` | `10001` | Sender used by the optional `telecom-claim-silent` preset. |
+| `TELECOM_CONFIRM_PRODUCT_KEYWORD` | empty | Optional product keyword used by the optional `telecom-claim-silent` confirmation rule. |
+| `TELECOM_CONFIRM_PLAN_ID` | empty | Optional plan id used by the optional `telecom-claim-silent` confirmation rule. |
+
+### Intercept rules
+
+Intercept rules run after a PushPlus message body is available and before Telegram notification. They are intended for cases where another automation consumes the SMS from PushPlus directly, or where selected messages should be acknowledged but not notified.
+
+Custom rule example:
+
+```json
+[
+  {
+    "name": "bank-otp",
+    "action": "silence",
+    "senderIncludes": "95588",
+    "textIncludesAll": ["验证码"]
+  }
+]
+```
+
+Supported match fields:
+
+- `sender` / `senderIncludes`
+- `titleIncludes`, `titleIncludesAll`, `titleIncludesAny`
+- `textIncludes`, `textIncludesAll`, `textIncludesAny`
+- `bodyIncludes`, `bodyIncludesAll`, `bodyIncludesAny`
+
+`SMS_INTERCEPT_PRESETS=telecom-claim-silent` is a built-in convenience preset for Beijing Telecom monthly-claim verification SMS. It is disabled by default so the open-source default remains a general PushPlus-to-Telegram forwarder.
+
+This integration does not store SMS bodies in Worker KV; only the deduplication key is written. The SMS body remains in PushPlus until PushPlus expires or deletes it.
 
 ## Telegram message format
 
@@ -165,8 +201,20 @@ Required repository secrets:
 | `FORWARDED_KV_NAMESPACE_ID` | Cloudflare KV namespace id for `FORWARDED_KV`. |
 | `CALLBACK_TOKEN` | Worker webhook token. |
 | `RELAY_TOKEN` | Pages relay token. |
+| `TELEGRAM_BOT_TOKEN` | Telegram bot token used by the Worker for non-silenced messages. |
+| `TELEGRAM_CHAT_ID` | Telegram chat id used by the Worker for non-silenced messages. |
+| `STATE_SECRET` | Random string used to generate Worker KV deduplication keys. |
 | `PUSHPLUS_TOKEN` | PushPlus user token. |
 | `PUSHPLUS_SECRET_KEY` | PushPlus Open API secret key. |
+
+Optional repository variables are passed into `wrangler.toml` during deployment:
+
+- `SMS_INTERCEPT_PRESETS`
+- `SMS_INTERCEPT_RULES`
+- `TELECOM_SMS_SENDER`
+- `TELECOM_CONFIRM_PRODUCT_KEYWORD`
+- `TELECOM_CONFIRM_PLAN_ID`
+- `PUSHPLUS_SET_USER_DEFAULT`
 
 ### Manual backfill
 
@@ -203,7 +251,7 @@ That callback contains `shortCode` and delivery status only. It does not include
 
 - Never commit tokens, secret keys, Telegram bot tokens, chat ids, cookies, or personal SMS content.
 - Telegram receives the SMS content, including verification codes. Use a trusted bot and chat.
-- The Worker stores only HMAC-based deduplication keys in KV, not SMS bodies or PushPlus `shortCode` values.
+- The Worker stores only HMAC-based deduplication keys in KV, not SMS bodies or PushPlus `shortCode` values. Silenced intercept matches are also stored as deduplication keys only.
 - Rotate credentials if they were exposed in chat, logs, screenshots, or repository history.
 - Keep `wrangler.toml` local if it contains account-specific settings. Use `wrangler.example.toml` as the shareable template.
 

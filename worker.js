@@ -65,6 +65,116 @@ function parseSmsFields(text) {
   };
 }
 
+function compactText(text) {
+  return String(text || '').replace(/\s+/g, '');
+}
+
+function listValue(value) {
+  if (Array.isArray(value)) return value.filter(item => item !== undefined && item !== null && item !== '');
+  if (value === undefined || value === null || value === '') return [];
+  return [value];
+}
+
+function splitCsv(value) {
+  return String(value || '')
+    .split(',')
+    .map(item => item.trim())
+    .filter(Boolean);
+}
+
+function collectValues(rule, keys) {
+  return keys.flatMap(key => listValue(rule[key]));
+}
+
+function includesAll(source, expected) {
+  const normalized = compactText(source);
+  return expected.every(item => normalized.includes(compactText(item)));
+}
+
+function includesAny(source, expected) {
+  if (!expected.length) return true;
+  const normalized = compactText(source);
+  return expected.some(item => normalized.includes(compactText(item)));
+}
+
+function isTruthy(value) {
+  return /^(1|true|yes)$/i.test(String(value || ''));
+}
+
+function messageMatchesRule(message, rule) {
+  const text = typeof message === 'string' ? message : message?.text || '';
+  const title = typeof message === 'string' ? '' : message?.title || '';
+  const fields = parseSmsFields(text);
+  const sender = fields.sender || (typeof message === 'string' ? '' : message?.sender || '');
+
+  const senderIncludes = collectValues(rule, ['sender', 'senderIncludes']);
+  if (senderIncludes.length && !includesAny(sender || text, senderIncludes)) return false;
+
+  const titleIncludesAll = collectValues(rule, ['titleIncludes', 'titleIncludesAll']);
+  if (titleIncludesAll.length && !includesAll(title, titleIncludesAll)) return false;
+
+  const titleIncludesAny = collectValues(rule, ['titleIncludesAny']);
+  if (titleIncludesAny.length && !includesAny(title, titleIncludesAny)) return false;
+
+  const textIncludesAll = collectValues(rule, ['textIncludes', 'textIncludesAll', 'bodyIncludes', 'bodyIncludesAll']);
+  if (textIncludesAll.length && !includesAll(text, textIncludesAll)) return false;
+
+  const textIncludesAny = collectValues(rule, ['textIncludesAny', 'bodyIncludesAny']);
+  if (textIncludesAny.length && !includesAny(text, textIncludesAny)) return false;
+
+  return true;
+}
+
+function telecomClaimPresetRules(env) {
+  const sender = env.TELECOM_SMS_SENDER || '10001';
+  const confirmTextIncludes = ['【办理提醒】', '验证码是', '中国电信北京公司', '办理'];
+  if (env.TELECOM_CONFIRM_PRODUCT_KEYWORD) confirmTextIncludes.push(env.TELECOM_CONFIRM_PRODUCT_KEYWORD);
+  if (env.TELECOM_CONFIRM_PLAN_ID) confirmTextIncludes.push(env.TELECOM_CONFIRM_PLAN_ID);
+
+  return [
+    {
+      name: 'telecom-claim-login',
+      action: 'silence',
+      senderIncludes: sender,
+      textIncludesAll: ['验证码', '感谢使用北京电信掌上营业厅'],
+    },
+    {
+      name: 'telecom-claim-confirm',
+      action: 'silence',
+      senderIncludes: sender,
+      textIncludesAll: confirmTextIncludes,
+    },
+  ];
+}
+
+function parseCustomRules(value) {
+  if (!value) return [];
+  const parsed = JSON.parse(value);
+  return Array.isArray(parsed) ? parsed : [parsed];
+}
+
+function loadInterceptRules(env) {
+  const presets = splitCsv(env.SMS_INTERCEPT_PRESETS);
+  if (isTruthy(env.TELECOM_CLAIM_SILENT)) presets.push('telecom-claim-silent');
+
+  const rules = [];
+  for (const preset of presets) {
+    if (preset === 'telecom-claim-silent') {
+      rules.push(...telecomClaimPresetRules(env));
+    }
+  }
+  rules.push(...parseCustomRules(env.SMS_INTERCEPT_RULES));
+  return rules;
+}
+
+function findInterceptRule(message, env) {
+  return loadInterceptRules(env).find(rule => messageMatchesRule(message, rule)) || null;
+}
+
+function interceptAction(rule) {
+  return String(rule?.action || 'silence').toLowerCase();
+}
+
 function isLabeledLine(line, labels) {
   return labels.some(label => {
     const escaped = label.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
@@ -191,8 +301,6 @@ function requireEnv(env, name) {
 }
 
 async function forwardPushPlusMessage(env, message) {
-  requireEnv(env, 'TELEGRAM_BOT_TOKEN');
-  requireEnv(env, 'TELEGRAM_CHAT_ID');
   requireEnv(env, 'STATE_SECRET');
   if (!env.FORWARDED_KV) throw new Error('Missing KV binding: FORWARDED_KV');
 
@@ -206,6 +314,12 @@ async function forwardPushPlusMessage(env, message) {
     text = await fetchPushPlusDetail(env, message.shortCode);
   }
   if (!text) return false;
+  const interceptRule = findInterceptRule({ ...message, text }, env);
+  if (interceptRule && interceptAction(interceptRule) === 'silence') {
+    await env.FORWARDED_KV.put(key, `intercept:${interceptRule.name || 'silence'}`, { expirationTtl: FORWARDED_TTL_SECONDS });
+    return false;
+  }
+
   if (env.MESSAGE_TITLE_KEYWORD && !String(message.title || '').includes(env.MESSAGE_TITLE_KEYWORD)) {
     await env.FORWARDED_KV.put(key, 'ignored', { expirationTtl: 60 * 60 * 24 * 30 });
     return false;
@@ -215,6 +329,8 @@ async function forwardPushPlusMessage(env, message) {
     return false;
   }
 
+  requireEnv(env, 'TELEGRAM_BOT_TOKEN');
+  requireEnv(env, 'TELEGRAM_CHAT_ID');
   const telegramMessage = { title: message.title || '短信转发', text };
   for (const chunk of splitTelegramText(buildTelegramText(telegramMessage))) {
     await sendTelegram({ env, text: chunk });
@@ -253,8 +369,6 @@ async function parseWebhookPayload(request) {
 
 async function processCallback(request, env, url) {
   requireEnv(env, 'CALLBACK_TOKEN');
-  requireEnv(env, 'TELEGRAM_BOT_TOKEN');
-  requireEnv(env, 'TELEGRAM_CHAT_ID');
   requireEnv(env, 'STATE_SECRET');
   if (!env.FORWARDED_KV) throw new Error('Missing KV binding: FORWARDED_KV');
 

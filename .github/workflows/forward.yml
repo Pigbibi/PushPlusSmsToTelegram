@@ -28,6 +28,11 @@ jobs:
       PUSHPLUS_PAGE_SIZE: ${{ vars.PUSHPLUS_PAGE_SIZE || '20' }}
       MESSAGE_TITLE_KEYWORD: ${{ vars.MESSAGE_TITLE_KEYWORD || '' }}
       MESSAGE_BODY_KEYWORD: ${{ vars.MESSAGE_BODY_KEYWORD || '' }}
+      SMS_INTERCEPT_PRESETS: ${{ vars.SMS_INTERCEPT_PRESETS || '' }}
+      SMS_INTERCEPT_RULES: ${{ vars.SMS_INTERCEPT_RULES || '' }}
+      TELECOM_SMS_SENDER: ${{ vars.TELECOM_SMS_SENDER || '' }}
+      TELECOM_CONFIRM_PRODUCT_KEYWORD: ${{ vars.TELECOM_CONFIRM_PRODUCT_KEYWORD || '' }}
+      TELECOM_CONFIRM_PLAN_ID: ${{ vars.TELECOM_CONFIRM_PLAN_ID || '' }}
       POLL_LOOKBACK_MINUTES: ${{ vars.POLL_LOOKBACK_MINUTES || '60' }}
       DRY_RUN: ${{ github.event.inputs.dry_run || 'false' }}
       STATE_FILE: .state/forwarded.json

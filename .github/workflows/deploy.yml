@@ -19,9 +19,18 @@ jobs:
       CALLBACK_TOKEN: ${{ secrets.CALLBACK_TOKEN }}
       RELAY_TOKEN: ${{ secrets.RELAY_TOKEN }}
       FORWARDED_KV_NAMESPACE_ID: ${{ secrets.FORWARDED_KV_NAMESPACE_ID }}
+      TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+      TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+      STATE_SECRET: ${{ secrets.STATE_SECRET }}
       PUSHPLUS_TOKEN: ${{ secrets.PUSHPLUS_TOKEN }}
       PUSHPLUS_SECRET_KEY: ${{ secrets.PUSHPLUS_SECRET_KEY }}
       PUSHPLUS_WEBHOOK_URL: https://pushplus-sms-to-telegram.pages.dev/pushplus/webhook/${{ secrets.RELAY_TOKEN }}
+      PUSHPLUS_SET_USER_DEFAULT: ${{ vars.PUSHPLUS_SET_USER_DEFAULT || 'true' }}
+      SMS_INTERCEPT_PRESETS: ${{ vars.SMS_INTERCEPT_PRESETS || '' }}
+      SMS_INTERCEPT_RULES: ${{ vars.SMS_INTERCEPT_RULES || '' }}
+      TELECOM_SMS_SENDER: ${{ vars.TELECOM_SMS_SENDER || '' }}
+      TELECOM_CONFIRM_PRODUCT_KEYWORD: ${{ vars.TELECOM_CONFIRM_PRODUCT_KEYWORD || '' }}
+      TELECOM_CONFIRM_PLAN_ID: ${{ vars.TELECOM_CONFIRM_PLAN_ID || '' }}
 
     steps:
       - uses: actions/checkout@v4
@@ -42,14 +51,38 @@ jobs:
           cp wrangler.example.toml wrangler.toml
           python3 - <<'PY'
           import os
+          import json
           from pathlib import Path
 
           path = Path('wrangler.toml')
           text = path.read_text()
           text = text.replace('replace-with-your-kv-namespace-id', os.environ['FORWARDED_KV_NAMESPACE_ID'])
+          optional_vars = [
+              'SMS_INTERCEPT_PRESETS',
+              'SMS_INTERCEPT_RULES',
+              'TELECOM_SMS_SENDER',
+              'TELECOM_CONFIRM_PRODUCT_KEYWORD',
+              'TELECOM_CONFIRM_PLAN_ID',
+          ]
+          extra_vars = ''.join(
+              f'{name} = {json.dumps(os.environ[name], ensure_ascii=False)}\n'
+              for name in optional_vars
+              if os.environ.get(name)
+          )
+          if extra_vars:
+              text = text.replace('[vars]\n', f'[vars]\n{extra_vars}', 1)
           path.write_text(text)
           PY
           printf '%s' "$CALLBACK_TOKEN" | npx wrangler secret put CALLBACK_TOKEN
+          if [ -n "${TELEGRAM_BOT_TOKEN:-}" ]; then
+            printf '%s' "$TELEGRAM_BOT_TOKEN" | npx wrangler secret put TELEGRAM_BOT_TOKEN
+          fi
+          if [ -n "${TELEGRAM_CHAT_ID:-}" ]; then
+            printf '%s' "$TELEGRAM_CHAT_ID" | npx wrangler secret put TELEGRAM_CHAT_ID
+          fi
+          if [ -n "${STATE_SECRET:-}" ]; then
+            printf '%s' "$STATE_SECRET" | npx wrangler secret put STATE_SECRET
+          fi
           npx wrangler deploy
 
       - name: Deploy Pages relay
