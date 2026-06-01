@@ -1,81 +1,73 @@
 # PushPlusSmsToTelegram
 
-[English](README.en.md) | 简体中文
+Forward SMS notifications received by PushPlus to a Telegram chat through Cloudflare.
 
-把 PushPlus 收到的短信**主动**转发到 Telegram Bot。适合“短信转发器只能推到 PushPlus，但你希望在 Telegram 里实时接收短信内容/验证码”的场景。
+This project is intended for setups where an SMS forwarding device can send messages to PushPlus, but you prefer to receive the SMS content, including verification codes, in Telegram.
 
-当前推荐链路：
+## What it does
 
-```text
-短信转发器 -> PushPlus -> Cloudflare Pages Relay -> Cloudflare Worker -> Telegram
-```
+- Receives PushPlus custom webhook requests and forwards matching SMS content to Telegram.
+- Uses Cloudflare Worker KV to deduplicate messages before sending them.
+- Supports optional title and body keyword filters.
+- Sends a concise Telegram message with sender, SMS time, and SMS body.
+- Includes a Cloudflare Pages relay for environments where PushPlus cannot reach a `workers.dev` endpoint directly.
+- Keeps a manual GitHub Actions backfill workflow for debugging or one-off historical forwarding.
 
-这个方案是事件触发：**只有 PushPlus 收到新消息时才会调用 Cloudflare**，没有 Cloudflare Cron，也没有 GitHub Actions 定时轮询。
+## Architecture
 
-## 功能
-
-- 主动 webhook 转发，无固定轮询延迟；
-- Telegram 消息只展示发件人、发件时间和短信内容；
-- 支持正文/标题关键字过滤；
-- KV 去重，避免同一条 PushPlus 消息重复转发；
-- 保留 GitHub Actions 手动补发脚本，默认不定时运行；
-- 提供 GitHub Actions 手动部署 workflow。
-
-## 为什么需要 Pages Relay？
-
-实测 PushPlus 服务器可能无法访问 `workers.dev` 域名，但可以访问 `pages.dev`。因此默认架构使用一个很薄的 Pages Relay：
+Default deployment:
 
 ```text
-PushPlus -> pages.dev Relay -> workers.dev Worker -> Telegram
+SMS forwarder -> PushPlus -> Cloudflare Pages Relay -> Cloudflare Worker -> Telegram
 ```
 
-Relay 只做两件事：
+The Pages relay is intentionally small. It validates `RELAY_TOKEN` and forwards the original request to the Worker. It does not store SMS content and does not need the Telegram bot token.
 
-1. 校验 URL 里的 `RELAY_TOKEN`；
-2. 把原始请求转发给 Worker。
+If PushPlus can reach your Worker through a custom domain, you can skip the relay and send PushPlus webhooks directly to:
 
-Relay 不保存短信内容，也不需要 Telegram token。
+```text
+https://your-worker.example.com/pushplus/webhook/YOUR_CALLBACK_TOKEN
+```
 
-如果你使用自己的 Worker 自定义域名，并且 PushPlus 可以访问它，可以跳过 Relay，直接把 PushPlus webhook 指向 Worker 的 `/pushplus/webhook/<CALLBACK_TOKEN>`。
+## Quick deployment
 
-## Telegram 消息内容
-
-转发到 Telegram 的消息包含：
-
-- 发件人，例如 `10001`；
-- 短信发送时间；
-- 短信内容，不脱敏。
-
-PushPlus 标题、短链接、`#SMS`、本机号码、开机时长、运营商、信号等设备元数据会被自动隐藏。
-
-## Cloudflare Worker 部署
+### 1. Prepare Cloudflare KV
 
 ```bash
 cp wrangler.example.toml wrangler.toml
 npx wrangler kv namespace create FORWARDED_KV
-# 把输出的 id 填入 wrangler.toml
+```
 
+Put the returned KV namespace id into `wrangler.toml`.
+
+### 2. Set Worker secrets
+
+```bash
 npx wrangler secret put CALLBACK_TOKEN
 npx wrangler secret put TELEGRAM_BOT_TOKEN
 npx wrangler secret put TELEGRAM_CHAT_ID
 npx wrangler secret put STATE_SECRET
-
-npx wrangler deploy
 ```
 
-`CALLBACK_TOKEN` 和 `STATE_SECRET` 建议使用随机长字符串：
+Use long random values for `CALLBACK_TOKEN` and `STATE_SECRET`:
 
 ```bash
 openssl rand -hex 32
 ```
 
-健康检查：
+### 3. Deploy the Worker
 
-```text
-https://你的-worker.workers.dev/health
+```bash
+npx wrangler deploy
 ```
 
-## Cloudflare Pages Relay 部署
+Health check:
+
+```text
+https://your-worker.workers.dev/health
+```
+
+### 4. Deploy the Pages relay
 
 ```bash
 cd pages-relay
@@ -84,21 +76,23 @@ npx wrangler pages secret put RELAY_TOKEN --project-name pushplus-sms-to-telegra
 npx wrangler pages deploy dist --project-name pushplus-sms-to-telegram --branch main
 ```
 
-`RELAY_TOKEN` 建议和 `CALLBACK_TOKEN` 使用同一个值。部署后 webhook 地址类似：
+`RELAY_TOKEN` can use the same value as `CALLBACK_TOKEN`.
+
+Relay webhook URL:
 
 ```text
-https://pushplus-sms-to-telegram.pages.dev/pushplus/webhook/你的RELAY_TOKEN
+https://pushplus-sms-to-telegram.pages.dev/pushplus/webhook/YOUR_RELAY_TOKEN
 ```
 
-Relay 健康检查：
+Relay health check:
 
 ```text
 https://pushplus-sms-to-telegram.pages.dev/health
 ```
 
-## 配置 PushPlus 主动 webhook
+### 5. Configure the PushPlus webhook
 
-PushPlus 自定义 webhook 使用纯文本 body，避免短信里出现换行或引号时破坏 JSON：
+Use a plain-text PushPlus custom webhook body:
 
 ```text
 标题：{title}
@@ -107,63 +101,80 @@ PushPlus 自定义 webhook 使用纯文本 body，避免短信里出现换行或
 {content}
 ```
 
-可以用脚本自动创建/更新 PushPlus 自定义 webhook，并把用户 token 默认通道切到该 webhook：
+Plain text is safer than JSON because SMS content may contain newlines or quotes.
+
+You can create or update the PushPlus custom webhook with:
 
 ```bash
 PUSHPLUS_TOKEN=... \
 PUSHPLUS_SECRET_KEY=... \
-PUSHPLUS_WEBHOOK_URL=https://pushplus-sms-to-telegram.pages.dev/pushplus/webhook/你的RELAY_TOKEN \
+PUSHPLUS_WEBHOOK_URL=https://pushplus-sms-to-telegram.pages.dev/pushplus/webhook/YOUR_RELAY_TOKEN \
 npm run configure:pushplus
 ```
 
-脚本只输出已脱敏的 webhook 地址，不会输出 token。
+The script redacts the webhook URL in output and does not print token values.
 
-## GitHub Secrets
+## Configuration
 
-如果使用 `.github/workflows/deploy.yml` 手动部署，需要配置这些仓库 Secrets：
+### Worker secrets
 
-| Secret | 说明 |
+| Secret | Purpose |
 | --- | --- |
-| `CLOUDFLARE_API_TOKEN` | Cloudflare API token，需要 Workers、KV、Pages 编辑权限。 |
-| `CALLBACK_TOKEN` | Worker webhook/callback 鉴权 token。 |
-| `RELAY_TOKEN` | Pages Relay 鉴权 token，通常与 `CALLBACK_TOKEN` 相同。 |
-| `PUSHPLUS_TOKEN` | PushPlus 用户 token。 |
-| `PUSHPLUS_SECRET_KEY` | PushPlus Open API secretKey。 |
+| `CALLBACK_TOKEN` | Protects the Worker webhook and callback endpoints. |
+| `TELEGRAM_BOT_TOKEN` | Telegram bot token from BotFather. |
+| `TELEGRAM_CHAT_ID` | Telegram chat id that receives forwarded messages. |
+| `STATE_SECRET` | Random string used to generate KV deduplication keys. |
 
-Worker 自身还需要这些 Cloudflare Secrets：
+### Pages relay secrets
 
-| Secret | 说明 |
+| Secret | Purpose |
 | --- | --- |
-| `CALLBACK_TOKEN` | Worker 入口鉴权。 |
-| `TELEGRAM_BOT_TOKEN` | Telegram BotFather 创建的 bot token。 |
-| `TELEGRAM_CHAT_ID` | 接收消息的 chat id。 |
-| `STATE_SECRET` | 用于生成 KV 去重 key 的随机字符串。 |
+| `RELAY_TOKEN` | Protects the relay endpoint. Usually the same as `CALLBACK_TOKEN`. |
 
-## Worker Variables
+### Optional Worker variables
 
-| Variable | 默认值 | 说明 |
+| Variable | Default | Purpose |
 | --- | --- | --- |
-| `MESSAGE_BODY_KEYWORD` | 空 | 正文过滤。只转发短信时可填 `#SMS`。 |
-| `MESSAGE_TITLE_KEYWORD` | 空 | 标题过滤。硬件标题固定为“短信转发”时可填 `短信转发`。 |
+| `MESSAGE_BODY_KEYWORD` | empty | Forward only messages whose body contains this value. Use `#SMS` if your forwarder marks SMS messages that way. |
+| `MESSAGE_TITLE_KEYWORD` | empty | Forward only messages whose title contains this value. For example, use `短信转发` if your device always uses that title. |
+| `PUSHPLUS_BASE_URL` | `https://www.pushplus.plus` | Override the PushPlus base URL used by callback compatibility mode. |
+
+## Telegram message format
+
+Forwarded Telegram messages contain:
+
+- sender, for example `10001`;
+- SMS sent time;
+- SMS content, without redaction.
+
+PushPlus titles, short links, `#SMS`, local phone number, uptime, carrier, signal strength, and other device metadata are removed from the Telegram message when recognized.
 
 ## GitHub Actions
 
-### Deploy active PushPlus relay
+The workflows are optional. They are useful if you want manual deployment or manual backfill from GitHub.
 
-`.github/workflows/deploy.yml` 是手动部署 workflow，会依次执行：
+### Manual deployment
 
-1. 测试和 lint；
-2. 部署 Worker；
-3. 部署 Pages Relay；
-4. 配置 PushPlus webhook。
+`.github/workflows/deploy.yml` runs on `workflow_dispatch` only. It performs tests, lint checks, Worker deployment, Pages relay deployment, and PushPlus webhook configuration.
 
-它不会定时运行。
+Required repository secrets:
 
-### Forward PushPlus SMS to Telegram
+| Secret | Purpose |
+| --- | --- |
+| `CLOUDFLARE_API_TOKEN` | Cloudflare API token with Workers, KV, and Pages edit permissions. |
+| `FORWARDED_KV_NAMESPACE_ID` | Cloudflare KV namespace id for `FORWARDED_KV`. |
+| `CALLBACK_TOKEN` | Worker webhook token. |
+| `RELAY_TOKEN` | Pages relay token. |
+| `PUSHPLUS_TOKEN` | PushPlus user token. |
+| `PUSHPLUS_SECRET_KEY` | PushPlus Open API secret key. |
 
-`.github/workflows/forward.yml` 是手动备用补发 workflow。它会通过 PushPlus Open API 拉取最近消息并转发，主要用于排障或补发历史消息。默认没有 schedule，不会自动轮询。
+### Manual backfill
 
-## 本地手动补发
+`.github/workflows/forward.yml` also runs on `workflow_dispatch` only. It reads recent messages from the PushPlus Open API and forwards messages that have not been recorded in state.
+
+Use it for debugging or one-off backfill. It is not scheduled and does not poll automatically.
+
+## Local backfill
 
 ```bash
 npm ci
@@ -176,21 +187,30 @@ DRY_RUN=true \
 npm run forward
 ```
 
-确认日志后，把 `DRY_RUN=false` 再执行即可真实转发。
+Review the logs first. Run again with `DRY_RUN=false` only when you are ready to send Telegram messages.
 
-## 兼容：PushPlus 消息完成回调
+## Compatibility callback
 
-Worker 仍兼容 PushPlus 官方“消息完成回调”：
+The Worker also supports the official PushPlus delivery callback endpoint:
 
 ```text
-https://你的-worker.workers.dev/pushplus/callback/你的CALLBACK_TOKEN
+https://your-worker.workers.dev/pushplus/callback/YOUR_CALLBACK_TOKEN
 ```
 
-该回调只带 `shortCode` 和发送状态，不直接带完整正文；Worker 收到后会访问 `/shortMessage/{shortCode}` 获取内容。生产环境优先使用自定义 webhook，因为它能直接把 `{content}` 推给 Worker。
+That callback contains `shortCode` and delivery status only. It does not include the full SMS body, so the Worker fetches `/shortMessage/{shortCode}` from PushPlus before forwarding. Prefer the custom webhook mode for normal deployments because it sends `{content}` directly to the Worker.
 
-## 安全说明
+## Security notes
 
-- 不要把 token、secretKey、Telegram bot token、chat id 写进仓库文件；
-- 公开仓库的 `state` 分支只保存 HMAC 后的去重 ID，不保存短信正文和 PushPlus `shortCode`；
-- Telegram 会收到短信内容，包括验证码，请确认 bot 和 chat 的访问范围可信；
-- 如果凭证曾在聊天、日志或截图中暴露，建议重新生成并更新对应平台配置。
+- Never commit tokens, secret keys, Telegram bot tokens, chat ids, cookies, or personal SMS content.
+- Telegram receives the SMS content, including verification codes. Use a trusted bot and chat.
+- The Worker stores only HMAC-based deduplication keys in KV, not SMS bodies or PushPlus `shortCode` values.
+- Rotate credentials if they were exposed in chat, logs, screenshots, or repository history.
+- Keep `wrangler.toml` local if it contains account-specific settings. Use `wrangler.example.toml` as the shareable template.
+
+## Development
+
+```bash
+npm ci
+npm test
+npm run lint
+```
