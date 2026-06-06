@@ -7,9 +7,21 @@ compatibility_date = "2026-05-31"
 MESSAGE_BODY_KEYWORD = "#SMS"
 MESSAGE_TITLE_KEYWORD = "短信转发"
 
+# Optional PushPlus record cleanup. Cleanup is disabled unless explicitly enabled.
+# PUSHPLUS_CLEANUP_ENABLED = "false"
+# PUSHPLUS_CLEANUP_RETENTION_DAYS = "90"
+# PUSHPLUS_CLEANUP_PAGE_SIZE = "50"
+# PUSHPLUS_CLEANUP_MAX_PAGES = "10"
+# PUSHPLUS_CLEANUP_MAX_DELETES = "20"
+# PUSHPLUS_CLEANUP_TITLE_KEYWORD = "短信转发"
+# PUSHPLUS_CLEANUP_REQUIRE_FORWARDED = "true"
+
 # Optional generic intercept rules. Matching rules can silence messages before Telegram notification.
 # SMS_INTERCEPT_PRESETS = "telecom-claim-silent"
 # SMS_INTERCEPT_RULES = '[{"name":"bank-otp","action":"silence","senderIncludes":"95588","textIncludesAll":["验证码"]}]'
+
+[triggers]
+crons = ["17 3 * * *"]
 
 [[kv_namespaces]]
 binding = "FORWARDED_KV"

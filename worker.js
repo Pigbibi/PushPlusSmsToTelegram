@@ -2,6 +2,10 @@ const PUSHPLUS_BASE_URL = 'https://www.pushplus.plus';
 const TELEGRAM_MAX_LENGTH = 3900;
 const FORWARDED_TTL_SECONDS = 60 * 60 * 24 * 180;
 const INBOX_TTL_SECONDS = 60 * 60 * 6;
+const DEFAULT_CLEANUP_RETENTION_DAYS = 90;
+const DEFAULT_CLEANUP_PAGE_SIZE = 50;
+const DEFAULT_CLEANUP_MAX_PAGES = 10;
+const DEFAULT_CLEANUP_MAX_DELETES = 20;
 
 function jsonResponse(body, status = 200) {
   return new Response(JSON.stringify(body), {
@@ -100,6 +104,35 @@ function includesAny(source, expected) {
 
 function isTruthy(value) {
   return /^(1|true|yes)$/i.test(String(value || ''));
+}
+
+function numberEnv(env, name, fallback, { min = 0, max = Number.MAX_SAFE_INTEGER } = {}) {
+  const raw = env[name];
+  if (raw === undefined || raw === null || raw === '') return fallback;
+  const parsed = Number(raw);
+  if (!Number.isFinite(parsed)) throw new Error(`Invalid numeric env ${name}: ${raw}`);
+  return Math.max(min, Math.min(Math.floor(parsed), max));
+}
+
+function parsePushPlusUpdateTime(value) {
+  if (value === undefined || value === null || value === '') return 0;
+  if (typeof value === 'number') return value < 1e12 ? value * 1000 : value;
+  const text = String(value).trim();
+  if (/^\d+$/.test(text)) {
+    const timestamp = Number(text);
+    return timestamp < 1e12 ? timestamp * 1000 : timestamp;
+  }
+  if (/([zZ]|[+-]\d\d:?\d\d)$/.test(text)) {
+    const parsed = Date.parse(text);
+    return Number.isNaN(parsed) ? 0 : parsed;
+  }
+  const m = text.match(/^(\d{4})-(\d{2})-(\d{2})[ T](\d{2}):(\d{2})(?::(\d{2}))?/);
+  if (m) {
+    const [, year, month, day, hour, minute, second = '0'] = m;
+    return Date.UTC(Number(year), Number(month) - 1, Number(day), Number(hour) - 8, Number(minute), Number(second));
+  }
+  const parsed = Date.parse(text);
+  return Number.isNaN(parsed) ? 0 : parsed;
 }
 
 function messageMatchesRule(message, rule) {
@@ -291,6 +324,120 @@ async function fetchPushPlusDetail(env, shortCode) {
   const res = await fetch(url, { headers: { accept: 'text/html, text/plain;q=0.9, */*;q=0.8' } });
   if (!res.ok) throw new Error(`PushPlus detail HTTP ${res.status}`);
   return htmlToText(await res.text());
+}
+
+async function pushPlusJson(url, options = {}) {
+  const res = await fetch(url, options);
+  const text = await res.text();
+  let data = {};
+  try {
+    data = text ? JSON.parse(text) : {};
+  } catch {
+    data = { raw: text };
+  }
+  if (!res.ok) throw new Error(`PushPlus HTTP ${res.status} ${new URL(url).pathname}`);
+  if (data?.code !== 200) throw new Error(`PushPlus API failed: ${data?.msg || 'unknown error'}`);
+  return data;
+}
+
+async function getPushPlusAccessKey(env) {
+  requireEnv(env, 'PUSHPLUS_TOKEN');
+  requireEnv(env, 'PUSHPLUS_SECRET_KEY');
+  const data = await pushPlusJson(pushPlusUrl(env, '/api/common/openApi/getAccessKey'), {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', accept: 'application/json' },
+    body: JSON.stringify({ token: env.PUSHPLUS_TOKEN, secretKey: env.PUSHPLUS_SECRET_KEY }),
+  });
+  const accessKey = data?.data?.accessKey;
+  if (!accessKey) throw new Error('PushPlus access key response missing accessKey');
+  return accessKey;
+}
+
+async function listPushPlusMessages(env, accessKey, current, pageSize) {
+  const data = await pushPlusJson(pushPlusUrl(env, '/api/open/message/list'), {
+    method: 'POST',
+    headers: {
+      'content-type': 'application/json',
+      accept: 'application/json',
+      'access-key': accessKey,
+    },
+    body: JSON.stringify({ current, pageSize }),
+  });
+  return {
+    items: data?.data?.list || [],
+    pages: Number(data?.data?.pages || 0),
+  };
+}
+
+async function deletePushPlusMessage(env, accessKey, shortCode) {
+  const url = pushPlusUrl(env, '/api/open/message/deleteMessage');
+  url.searchParams.set('shortCode', shortCode);
+  await pushPlusJson(url, {
+    method: 'DELETE',
+    headers: { accept: 'application/json', 'access-key': accessKey },
+  });
+}
+
+async function alreadyForwarded(shortCode, env) {
+  requireEnv(env, 'STATE_SECRET');
+  if (!env.FORWARDED_KV) throw new Error('Missing KV binding: FORWARDED_KV');
+  return Boolean(await env.FORWARDED_KV.get(await dedupeKey(shortCode, env)));
+}
+
+async function cleanupPushPlusMessages(env) {
+  if (!isTruthy(env.PUSHPLUS_CLEANUP_ENABLED)) {
+    return { enabled: false, scanned: 0, candidates: 0, deleted: 0, failed: 0 };
+  }
+
+  const retentionDays = numberEnv(env, 'PUSHPLUS_CLEANUP_RETENTION_DAYS', DEFAULT_CLEANUP_RETENTION_DAYS, { min: 1, max: 3650 });
+  const pageSize = numberEnv(env, 'PUSHPLUS_CLEANUP_PAGE_SIZE', DEFAULT_CLEANUP_PAGE_SIZE, { min: 1, max: 50 });
+  const maxPages = numberEnv(env, 'PUSHPLUS_CLEANUP_MAX_PAGES', DEFAULT_CLEANUP_MAX_PAGES, { min: 1, max: 100 });
+  const maxDeletes = numberEnv(env, 'PUSHPLUS_CLEANUP_MAX_DELETES', DEFAULT_CLEANUP_MAX_DELETES, { min: 1, max: 50 });
+  const requireForwarded = env.PUSHPLUS_CLEANUP_REQUIRE_FORWARDED === undefined
+    ? true
+    : isTruthy(env.PUSHPLUS_CLEANUP_REQUIRE_FORWARDED);
+  const titleKeyword = env.PUSHPLUS_CLEANUP_TITLE_KEYWORD || env.MESSAGE_TITLE_KEYWORD || '';
+  const cutoff = Date.now() - retentionDays * 24 * 60 * 60 * 1000;
+  const accessKey = await getPushPlusAccessKey(env);
+
+  const candidates = [];
+  let scanned = 0;
+  for (let current = 1; current <= maxPages && candidates.length < maxDeletes; current += 1) {
+    const { items, pages } = await listPushPlusMessages(env, accessKey, current, pageSize);
+    if (!items.length) break;
+    scanned += items.length;
+
+    for (const item of items) {
+      if (candidates.length >= maxDeletes) break;
+      const shortCode = item?.shortCode || '';
+      if (!shortCode) continue;
+      if (titleKeyword && !String(item.title || '').includes(titleKeyword)) continue;
+      const updatedAt = parsePushPlusUpdateTime(item.updateTime);
+      if (!updatedAt || updatedAt >= cutoff) continue;
+      if (requireForwarded && !await alreadyForwarded(shortCode, env)) continue;
+      candidates.push({
+        shortCode,
+        title: item.title || '',
+        updateTime: item.updateTime || '',
+      });
+    }
+
+    if (pages && current >= pages) break;
+  }
+
+  let deleted = 0;
+  let failed = 0;
+  for (const item of candidates) {
+    try {
+      await deletePushPlusMessage(env, accessKey, item.shortCode);
+      deleted += 1;
+    } catch (err) {
+      failed += 1;
+      console.error(`PushPlus cleanup delete failed: ${err.message}`);
+    }
+  }
+
+  return { enabled: true, scanned, candidates: candidates.length, deleted, failed };
 }
 
 async function sendTelegram({ env, text }) {
@@ -499,6 +646,16 @@ function handleCallback(request, env, ctx) {
 }
 
 export default {
+  async scheduled(_event, env, ctx) {
+    ctx.waitUntil(cleanupPushPlusMessages(env)
+      .then(result => {
+        console.log(JSON.stringify({ event: 'pushplus_cleanup', ...result }));
+      })
+      .catch(err => {
+        console.error(`PushPlus cleanup failed: ${err.message}`);
+      }));
+  },
+
   async fetch(request, env, ctx) {
     const url = new URL(request.url);
     if (request.method === 'GET' && url.pathname === '/health') {
