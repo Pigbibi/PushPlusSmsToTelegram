@@ -11,6 +11,7 @@ This project is intended for setups where an SMS forwarding device can send mess
 - Supports optional title/body filters and configurable intercept rules before Telegram notification.
 - Can silence selected SMS classes, such as verification codes consumed by another automation, and optionally store only those matches in a short-lived protected inbox.
 - Sends a concise Telegram message with sender, SMS time, and SMS body when no intercept rule silences the message.
+- Can optionally delete old PushPlus message records on a Cloudflare Cron schedule after they have been handled.
 - Includes a Cloudflare Pages relay for environments where PushPlus cannot reach a `workers.dev` endpoint directly.
 - Keeps a manual GitHub Actions backfill workflow for debugging or one-off historical forwarding.
 
@@ -49,6 +50,8 @@ npx wrangler secret put TELEGRAM_BOT_TOKEN
 npx wrangler secret put TELEGRAM_CHAT_ID
 npx wrangler secret put STATE_SECRET
 npx wrangler secret put INBOX_TOKEN  # only needed if you use the protected /messages inbox
+npx wrangler secret put PUSHPLUS_TOKEN  # only needed for scheduled PushPlus cleanup
+npx wrangler secret put PUSHPLUS_SECRET_KEY  # only needed for scheduled PushPlus cleanup
 ```
 
 Use long random values for `CALLBACK_TOKEN` and `STATE_SECRET`:
@@ -128,6 +131,8 @@ By default, `npm run configure:pushplus` also sets the user-token default channe
 | `TELEGRAM_BOT_TOKEN` | Telegram bot token from BotFather. |
 | `TELEGRAM_CHAT_ID` | Telegram chat id that receives forwarded messages. |
 | `STATE_SECRET` | Random string used to generate KV deduplication keys. |
+| `PUSHPLUS_TOKEN` | PushPlus user token. Required only when scheduled PushPlus record cleanup is enabled. |
+| `PUSHPLUS_SECRET_KEY` | PushPlus Open API secret key. Required only when scheduled PushPlus record cleanup is enabled. |
 
 ### Pages relay secrets
 
@@ -147,6 +152,21 @@ By default, `npm run configure:pushplus` also sets the user-token default channe
 | `TELECOM_SMS_SENDER` | `10001` | Sender used by the optional `telecom-claim-silent` preset. |
 | `TELECOM_CONFIRM_PRODUCT_KEYWORD` | empty | Optional product keyword used by the optional `telecom-claim-silent` confirmation rule. |
 | `TELECOM_CONFIRM_PLAN_ID` | empty | Optional plan id used by the optional `telecom-claim-silent` confirmation rule. |
+| `PUSHPLUS_CLEANUP_ENABLED` | `false` | Set to `true` to delete old PushPlus message records from the scheduled Worker event. |
+| `PUSHPLUS_CLEANUP_RETENTION_DAYS` | `90` | Delete PushPlus records older than this many days. |
+| `PUSHPLUS_CLEANUP_PAGE_SIZE` | `50` | Number of PushPlus records to read per cleanup page. Maximum is 50. |
+| `PUSHPLUS_CLEANUP_MAX_PAGES` | `10` | Maximum number of PushPlus list pages to scan per scheduled cleanup run. |
+| `PUSHPLUS_CLEANUP_MAX_DELETES` | `20` | Maximum number of PushPlus records to delete per scheduled cleanup run. |
+| `PUSHPLUS_CLEANUP_TITLE_KEYWORD` | `MESSAGE_TITLE_KEYWORD` | Optional title filter for cleanup. Set this when the same PushPlus account contains non-SMS messages. |
+| `PUSHPLUS_CLEANUP_REQUIRE_FORWARDED` | `true` | Only delete records whose `shortCode` is still present in Worker KV deduplication state. |
+
+### PushPlus record cleanup
+
+`wrangler.example.toml` includes a daily Cron Trigger. Cleanup is disabled unless `PUSHPLUS_CLEANUP_ENABLED=true` is set.
+
+When enabled, the Worker gets a PushPlus Open API access key, lists message records, and deletes records older than `PUSHPLUS_CLEANUP_RETENTION_DAYS`. By default it also requires the message `shortCode` to exist in Worker KV deduplication state, so the cleanup targets messages already handled by this Worker. Keep `{url}` in the PushPlus custom webhook body so the Worker can derive the same `shortCode` used by the cleanup job. The default forwarded-state TTL is 180 days, which is longer than the default 90-day cleanup window.
+
+PushPlus deletion is irreversible: once deleted, all receivers can no longer view that message in PushPlus. Keep `PUSHPLUS_CLEANUP_REQUIRE_FORWARDED=true` and set `PUSHPLUS_CLEANUP_TITLE_KEYWORD` if the account also receives other PushPlus messages.
 
 ### Intercept rules
 
@@ -226,6 +246,13 @@ Optional repository variables are passed into `wrangler.toml` during deployment:
 - `TELECOM_CONFIRM_PRODUCT_KEYWORD`
 - `TELECOM_CONFIRM_PLAN_ID`
 - `PUSHPLUS_SET_USER_DEFAULT`
+- `PUSHPLUS_CLEANUP_ENABLED`
+- `PUSHPLUS_CLEANUP_RETENTION_DAYS`
+- `PUSHPLUS_CLEANUP_PAGE_SIZE`
+- `PUSHPLUS_CLEANUP_MAX_PAGES`
+- `PUSHPLUS_CLEANUP_MAX_DELETES`
+- `PUSHPLUS_CLEANUP_TITLE_KEYWORD`
+- `PUSHPLUS_CLEANUP_REQUIRE_FORWARDED`
 
 ### Manual backfill
 

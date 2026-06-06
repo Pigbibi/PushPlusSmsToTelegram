@@ -32,6 +32,13 @@ jobs:
       TELECOM_SMS_SENDER: ${{ vars.TELECOM_SMS_SENDER || '' }}
       TELECOM_CONFIRM_PRODUCT_KEYWORD: ${{ vars.TELECOM_CONFIRM_PRODUCT_KEYWORD || '' }}
       TELECOM_CONFIRM_PLAN_ID: ${{ vars.TELECOM_CONFIRM_PLAN_ID || '' }}
+      PUSHPLUS_CLEANUP_ENABLED: ${{ vars.PUSHPLUS_CLEANUP_ENABLED || '' }}
+      PUSHPLUS_CLEANUP_RETENTION_DAYS: ${{ vars.PUSHPLUS_CLEANUP_RETENTION_DAYS || '' }}
+      PUSHPLUS_CLEANUP_PAGE_SIZE: ${{ vars.PUSHPLUS_CLEANUP_PAGE_SIZE || '' }}
+      PUSHPLUS_CLEANUP_MAX_PAGES: ${{ vars.PUSHPLUS_CLEANUP_MAX_PAGES || '' }}
+      PUSHPLUS_CLEANUP_MAX_DELETES: ${{ vars.PUSHPLUS_CLEANUP_MAX_DELETES || '' }}
+      PUSHPLUS_CLEANUP_TITLE_KEYWORD: ${{ vars.PUSHPLUS_CLEANUP_TITLE_KEYWORD || '' }}
+      PUSHPLUS_CLEANUP_REQUIRE_FORWARDED: ${{ vars.PUSHPLUS_CLEANUP_REQUIRE_FORWARDED || '' }}
 
     steps:
       - uses: actions/checkout@v6
@@ -64,6 +71,13 @@ jobs:
               'TELECOM_SMS_SENDER',
               'TELECOM_CONFIRM_PRODUCT_KEYWORD',
               'TELECOM_CONFIRM_PLAN_ID',
+              'PUSHPLUS_CLEANUP_ENABLED',
+              'PUSHPLUS_CLEANUP_RETENTION_DAYS',
+              'PUSHPLUS_CLEANUP_PAGE_SIZE',
+              'PUSHPLUS_CLEANUP_MAX_PAGES',
+              'PUSHPLUS_CLEANUP_MAX_DELETES',
+              'PUSHPLUS_CLEANUP_TITLE_KEYWORD',
+              'PUSHPLUS_CLEANUP_REQUIRE_FORWARDED',
           ]
           extra_vars = ''.join(
               f'{name} = {json.dumps(os.environ[name], ensure_ascii=False)}\n'
@@ -86,6 +100,12 @@ jobs:
           fi
           if [ -n "${STATE_SECRET:-}" ]; then
             printf '%s' "$STATE_SECRET" | npx wrangler secret put STATE_SECRET
+          fi
+          if [ -n "${PUSHPLUS_TOKEN:-}" ]; then
+            printf '%s' "$PUSHPLUS_TOKEN" | npx wrangler secret put PUSHPLUS_TOKEN
+          fi
+          if [ -n "${PUSHPLUS_SECRET_KEY:-}" ]; then
+            printf '%s' "$PUSHPLUS_SECRET_KEY" | npx wrangler secret put PUSHPLUS_SECRET_KEY
           fi
           npx wrangler deploy
 
