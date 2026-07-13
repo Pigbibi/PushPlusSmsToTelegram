@@ -1,5 +1,14 @@
 # PushPlusSmsToTelegram
 
+
+## 中文概览
+
+这是一个把 PushPlus 短信转发到 Telegram 的 Cloudflare 方案，支持去重、过滤与短期受保护收件箱。
+
+## English Overview
+
+This repository forwards PushPlus SMS to Telegram through Cloudflare, with deduplication, filtering, and a short-lived protected inbox.
+
 Forward SMS notifications received by PushPlus to a Telegram chat through Cloudflare.
 
 This project is intended for setups where an SMS forwarding device can send messages to PushPlus, but you prefer to receive the SMS content, including verification codes, in Telegram.
