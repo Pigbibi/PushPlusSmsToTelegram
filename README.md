@@ -153,6 +153,7 @@ By default, `npm run configure:pushplus` also sets the user-token default channe
 | `SMS_INTERCEPT_PRESETS` | empty | Comma-separated built-in intercept presets. Currently supports `telecom-claim-silent`. |
 | `SMS_INTERCEPT_RULES` | empty | JSON object or array of custom intercept rules. Matching rules with `action: "silence"` are marked as handled and are not sent to Telegram. |
 | `TELECOM_SMS_SENDER` | `10001` | Sender used by the optional `telecom-claim-silent` preset. |
+| `TELECOM_SUCCESS_SMS_SENDER` | `10000` | Success-receipt sender used by the optional `telecom-claim-silent` preset. |
 | `TELECOM_CONFIRM_PRODUCT_KEYWORD` | empty | Optional product keyword used by the optional `telecom-claim-silent` confirmation rule. |
 | `TELECOM_CONFIRM_PLAN_ID` | empty | Optional plan id used by the optional `telecom-claim-silent` confirmation rule. |
 | `PUSHPLUS_CLEANUP_ENABLED` | `false` | Set to `true` to delete old PushPlus message records from the scheduled Worker event. |
@@ -197,7 +198,7 @@ Supported match fields:
 - `textIncludes`, `textIncludesAll`, `textIncludesAny`
 - `bodyIncludes`, `bodyIncludesAll`, `bodyIncludesAny`
 
-`SMS_INTERCEPT_PRESETS=telecom-claim-silent` is a built-in convenience preset for Beijing Telecom monthly-claim verification SMS. It is disabled by default so the open-source default remains a general PushPlus-to-Telegram forwarder.
+`SMS_INTERCEPT_PRESETS=telecom-claim-silent` is a built-in convenience preset for Beijing Telecom monthly-claim verification and success-receipt SMS. It is disabled by default so the open-source default remains a general PushPlus-to-Telegram forwarder.
 
 Rules can also set `store: true` or use an action containing `store` to write matching SMS into a short-lived, token-protected inbox. The built-in `telecom-claim-silent` preset stores matches for up to 6 hours so another workflow can fetch them from:
 
@@ -246,6 +247,7 @@ Optional repository variables are passed into `wrangler.toml` during deployment:
 - `SMS_INTERCEPT_PRESETS`
 - `SMS_INTERCEPT_RULES`
 - `TELECOM_SMS_SENDER`
+- `TELECOM_SUCCESS_SMS_SENDER`
 - `TELECOM_CONFIRM_PRODUCT_KEYWORD`
 - `TELECOM_CONFIRM_PLAN_ID`
 - `PUSHPLUS_SET_USER_DEFAULT`
