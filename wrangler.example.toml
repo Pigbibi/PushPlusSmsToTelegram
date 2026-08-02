@@ -18,6 +18,7 @@ MESSAGE_TITLE_KEYWORD = "短信转发"
 
 # Optional generic intercept rules. Matching rules can silence messages before Telegram notification.
 # SMS_INTERCEPT_PRESETS = "telecom-claim-silent"
+# TELECOM_SUCCESS_SMS_SENDER = "10000"
 # SMS_INTERCEPT_RULES = '[{"name":"bank-otp","action":"silence","senderIncludes":"95588","textIncludesAll":["验证码"]}]'
 
 [triggers]

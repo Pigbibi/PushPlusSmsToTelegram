@@ -161,9 +161,13 @@ function messageMatchesRule(message, rule) {
 
 function telecomClaimPresetRules(env) {
   const sender = env.TELECOM_SMS_SENDER || '10001';
+  const successSender = env.TELECOM_SUCCESS_SMS_SENDER || '10000';
   const confirmTextIncludes = ['【办理提醒】', '验证码是', '中国电信北京公司', '办理'];
+  const successTextIncludes = ['【办理提醒】', 'wap电子渠道', '成功办理', '方案编号'];
   if (env.TELECOM_CONFIRM_PRODUCT_KEYWORD) confirmTextIncludes.push(env.TELECOM_CONFIRM_PRODUCT_KEYWORD);
   if (env.TELECOM_CONFIRM_PLAN_ID) confirmTextIncludes.push(env.TELECOM_CONFIRM_PLAN_ID);
+  if (env.TELECOM_CONFIRM_PRODUCT_KEYWORD) successTextIncludes.push(env.TELECOM_CONFIRM_PRODUCT_KEYWORD);
+  if (env.TELECOM_CONFIRM_PLAN_ID) successTextIncludes.push(env.TELECOM_CONFIRM_PLAN_ID);
 
   return [
     {
@@ -179,6 +183,13 @@ function telecomClaimPresetRules(env) {
       store: true,
       senderIncludes: sender,
       textIncludesAll: confirmTextIncludes,
+    },
+    {
+      name: 'telecom-claim-success',
+      action: 'silence',
+      store: true,
+      senderIncludes: successSender,
+      textIncludesAll: successTextIncludes,
     },
   ];
 }

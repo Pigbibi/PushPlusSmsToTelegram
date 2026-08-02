@@ -114,6 +114,28 @@ test('matches Beijing Telecom confirmation SMS with preset product and plan chec
   assert.equal(mismatchedRule, null);
 });
 
+test('matches Beijing Telecom successful claim receipt from the service sender', () => {
+  const text = [
+    '【办理提醒】尊敬的客户，您已通过wap电子渠道成功办理测试语音包（方案编号TEST-PLAN），本月有效',
+    '发件号码: 10000',
+  ].join('\n');
+
+  const matchingRule = findInterceptRule({ title: '短信转发', text }, loadInterceptRules({
+    SMS_INTERCEPT_PRESETS: 'telecom-claim-silent',
+    TELECOM_CONFIRM_PRODUCT_KEYWORD: '测试语音包',
+    TELECOM_CONFIRM_PLAN_ID: 'TEST-PLAN',
+  }));
+  const mismatchedRule = findInterceptRule({ title: '短信转发', text }, loadInterceptRules({
+    SMS_INTERCEPT_PRESETS: 'telecom-claim-silent',
+    TELECOM_CONFIRM_PLAN_ID: 'OTHER-PLAN',
+  }));
+
+  assert.equal(matchingRule?.name, 'telecom-claim-success');
+  assert.equal(interceptShouldSilence(matchingRule), true);
+  assert.equal(interceptShouldStore(matchingRule), true);
+  assert.equal(mismatchedRule, null);
+});
+
 test('does not match unrelated SMS with preset interceptor', () => {
   const text = '验证码：111111。您正在登录其他服务。\n发件号码: 10001';
 
