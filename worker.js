@@ -6,6 +6,13 @@ const DEFAULT_CLEANUP_RETENTION_DAYS = 90;
 const DEFAULT_CLEANUP_PAGE_SIZE = 50;
 const DEFAULT_CLEANUP_MAX_PAGES = 10;
 const DEFAULT_CLEANUP_MAX_DELETES = 20;
+const DEFAULT_RECOVERY_LOOKBACK_HOURS = 48;
+const DEFAULT_RECOVERY_MIN_AGE_MINUTES = 10;
+const DEFAULT_RECOVERY_PAGE_SIZE = 50;
+const DEFAULT_RECOVERY_MAX_PAGES = 2;
+const DEFAULT_RECOVERY_MAX_MESSAGES = 20;
+const RECOVERY_CRON = '31 * * * *';
+const CLEANUP_CRON = '17 3 * * *';
 
 function jsonResponse(body, status = 200) {
   return new Response(JSON.stringify(body), {
@@ -451,6 +458,150 @@ async function cleanupPushPlusMessages(env) {
   return { enabled: true, scanned, candidates: candidates.length, deleted, failed };
 }
 
+async function recoverPushPlusMessages(env) {
+  if (!isTruthy(env.PUSHPLUS_RECOVERY_ENABLED)) {
+    return {
+      enabled: false,
+      scanned: 0,
+      candidates: 0,
+      processed: 0,
+      forwarded: 0,
+      intercepted: 0,
+      filtered: 0,
+      duplicates: 0,
+      empty: 0,
+      failed: 0,
+    };
+  }
+
+  const notBefore = Date.parse(String(env.PUSHPLUS_RECOVERY_NOT_BEFORE || ''));
+  if (!Number.isFinite(notBefore)) {
+    console.warn('PushPlus recovery skipped: missing or invalid PUSHPLUS_RECOVERY_NOT_BEFORE');
+    return {
+      enabled: true,
+      skipped: 'invalid_activation_baseline',
+      scanned: 0,
+      candidates: 0,
+      processed: 0,
+      forwarded: 0,
+      intercepted: 0,
+      filtered: 0,
+      duplicates: 0,
+      empty: 0,
+      failed: 0,
+    };
+  }
+
+  const lookbackHours = numberEnv(
+    env,
+    'PUSHPLUS_RECOVERY_LOOKBACK_HOURS',
+    DEFAULT_RECOVERY_LOOKBACK_HOURS,
+    { min: 1, max: 24 * 30 },
+  );
+  const minAgeMinutes = numberEnv(
+    env,
+    'PUSHPLUS_RECOVERY_MIN_AGE_MINUTES',
+    DEFAULT_RECOVERY_MIN_AGE_MINUTES,
+    { min: 1, max: 24 * 60 },
+  );
+  const pageSize = numberEnv(
+    env,
+    'PUSHPLUS_RECOVERY_PAGE_SIZE',
+    DEFAULT_RECOVERY_PAGE_SIZE,
+    { min: 1, max: 50 },
+  );
+  const maxPages = numberEnv(
+    env,
+    'PUSHPLUS_RECOVERY_MAX_PAGES',
+    DEFAULT_RECOVERY_MAX_PAGES,
+    { min: 1, max: 20 },
+  );
+  const maxMessages = numberEnv(
+    env,
+    'PUSHPLUS_RECOVERY_MAX_MESSAGES',
+    DEFAULT_RECOVERY_MAX_MESSAGES,
+    { min: 1, max: 50 },
+  );
+  const titleKeyword = env.PUSHPLUS_RECOVERY_TITLE_KEYWORD || env.MESSAGE_TITLE_KEYWORD || '';
+  const now = Date.now();
+  const oldestAllowed = Math.max(notBefore, now - lookbackHours * 60 * 60 * 1000);
+  const newestAllowed = now - minAgeMinutes * 60 * 1000;
+  const accessKey = await getPushPlusAccessKey(env);
+  const candidates = [];
+  const seen = new Set();
+  let scanned = 0;
+
+  for (let current = 1; current <= maxPages; current += 1) {
+    const { items, pages } = await listPushPlusMessages(env, accessKey, current, pageSize);
+    if (!items.length) break;
+    scanned += items.length;
+
+    for (const item of items) {
+      const shortCode = item?.shortCode || '';
+      if (!shortCode || seen.has(shortCode)) continue;
+      seen.add(shortCode);
+      if (titleKeyword && !String(item.title || '').includes(titleKeyword)) continue;
+      const updatedAt = parsePushPlusUpdateTime(item.updateTime);
+      if (!updatedAt || updatedAt < oldestAllowed || updatedAt > newestAllowed) continue;
+      if (await alreadyForwarded(shortCode, env)) continue;
+      candidates.push({
+        shortCode,
+        title: item.title || '',
+        updatedAt,
+      });
+    }
+
+    if (pages && current >= pages) break;
+  }
+
+  candidates.sort((a, b) => a.updatedAt - b.updatedAt);
+  const counts = {
+    forwarded: 0,
+    intercepted: 0,
+    filtered: 0,
+    duplicates: 0,
+    empty: 0,
+    failed: 0,
+  };
+  for (const item of candidates.slice(0, maxMessages)) {
+    try {
+      const outcome = await forwardPushPlusMessage(env, item);
+      if (!Object.hasOwn(counts, outcome)) throw new Error(`Unexpected forwarding outcome: ${outcome}`);
+      counts[outcome] += 1;
+    } catch (err) {
+      counts.failed += 1;
+      console.error(`PushPlus recovery failed: ${err.message}`);
+    }
+  }
+
+  const processed = counts.forwarded + counts.intercepted + counts.filtered;
+  const alertEnabled = env.PUSHPLUS_RECOVERY_ALERT_ENABLED === undefined
+    ? true
+    : isTruthy(env.PUSHPLUS_RECOVERY_ALERT_ENABLED);
+  if (alertEnabled && counts.forwarded > 0) {
+    try {
+      await sendTelegram({
+        env,
+        text: [
+          '⚠️ PushPlus realtime delivery missed messages',
+          `Recovered ${counts.forwarded} message(s)`,
+          `Processed ${processed}; failed ${counts.failed}`,
+        ].join('\n'),
+      });
+    } catch (err) {
+      console.error(`PushPlus recovery alert failed: ${err.message}`);
+    }
+  }
+
+  return {
+    enabled: true,
+    scanned,
+    candidates: candidates.length,
+    processed,
+    ...counts,
+  };
+}
+
 async function sendTelegram({ env, text }) {
   const url = `https://api.telegram.org/bot${env.TELEGRAM_BOT_TOKEN}/sendMessage`;
   const res = await fetch(url, {
@@ -531,15 +682,15 @@ async function forwardPushPlusMessage(env, message) {
   if (!env.FORWARDED_KV) throw new Error('Missing KV binding: FORWARDED_KV');
 
   const sourceId = message.sourceId || message.shortCode || message.url || await sha256Hex(`${message.title || ''}\n${message.text || ''}`);
-  if (!sourceId) return false;
+  if (!sourceId) return 'empty';
   const key = await dedupeKey(sourceId, env);
-  if (await env.FORWARDED_KV.get(key)) return false;
+  if (await env.FORWARDED_KV.get(key)) return 'duplicates';
 
   let text = message.text || '';
   if (!text && message.shortCode) {
     text = await fetchPushPlusDetail(env, message.shortCode);
   }
-  if (!text) return false;
+  if (!text) return 'empty';
   const interceptRule = findInterceptRule({ ...message, text }, env);
   if (interceptRule) {
     if (interceptShouldStore(interceptRule)) {
@@ -547,17 +698,17 @@ async function forwardPushPlusMessage(env, message) {
     }
     if (interceptShouldSilence(interceptRule)) {
       await env.FORWARDED_KV.put(key, `intercept:${interceptRule.name || 'silence'}`, { expirationTtl: FORWARDED_TTL_SECONDS });
-      return false;
+      return 'intercepted';
     }
   }
 
   if (env.MESSAGE_TITLE_KEYWORD && !String(message.title || '').includes(env.MESSAGE_TITLE_KEYWORD)) {
     await env.FORWARDED_KV.put(key, 'ignored', { expirationTtl: 60 * 60 * 24 * 30 });
-    return false;
+    return 'filtered';
   }
   if (env.MESSAGE_BODY_KEYWORD && !text.includes(env.MESSAGE_BODY_KEYWORD)) {
     await env.FORWARDED_KV.put(key, 'ignored', { expirationTtl: 60 * 60 * 24 * 30 });
-    return false;
+    return 'filtered';
   }
 
   requireEnv(env, 'TELEGRAM_BOT_TOKEN');
@@ -567,7 +718,7 @@ async function forwardPushPlusMessage(env, message) {
     await sendTelegram({ env, text: chunk });
   }
   await env.FORWARDED_KV.put(key, new Date().toISOString(), { expirationTtl: FORWARDED_TTL_SECONDS });
-  return true;
+  return 'forwarded';
 }
 
 function callbackToken(request, url) {
@@ -657,14 +808,27 @@ function handleCallback(request, env, ctx) {
 }
 
 export default {
-  async scheduled(_event, env, ctx) {
-    ctx.waitUntil(cleanupPushPlusMessages(env)
-      .then(result => {
-        console.log(JSON.stringify({ event: 'pushplus_cleanup', ...result }));
-      })
-      .catch(err => {
-        console.error(`PushPlus cleanup failed: ${err.message}`);
-      }));
+  async scheduled(event, env, ctx) {
+    const cron = event?.cron || '';
+    if (cron === RECOVERY_CRON) {
+      ctx.waitUntil(recoverPushPlusMessages(env)
+        .then(result => {
+          console.log(JSON.stringify({ event: 'pushplus_recovery', ...result }));
+        })
+        .catch(err => {
+          console.error(`PushPlus recovery failed: ${err.message}`);
+        }));
+      return;
+    }
+    if (!cron || cron === CLEANUP_CRON) {
+      ctx.waitUntil(cleanupPushPlusMessages(env)
+        .then(result => {
+          console.log(JSON.stringify({ event: 'pushplus_cleanup', ...result }));
+        })
+        .catch(err => {
+          console.error(`PushPlus cleanup failed: ${err.message}`);
+        }));
+    }
   },
 
   async fetch(request, env, ctx) {

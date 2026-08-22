@@ -33,6 +33,7 @@
 - 从 Telegram 消息中移除可识别的设备状态元数据。
 - 在通知前应用自定义拦截规则。
 - 把指定消息写入带 token 的 inbox，TTL 为 6 小时。
+- 有界补偿实时链路漏掉的近期消息。
 - 通过 Cloudflare Cron 有界删除旧 PushPlus 记录。
 - 提供手动部署和补发用的 GitHub Actions workflow。
 
@@ -71,7 +72,7 @@ npx wrangler secret put STATE_SECRET
 openssl rand -hex 32
 ```
 
-受保护 inbox 和定时清理需要额外 secrets：
+受保护 inbox、漏发补偿和定时清理需要额外 secrets：
 
 ```bash
 npx wrangler secret put INBOX_TOKEN
@@ -158,6 +159,10 @@ npm run configure:pushplus
 5. 应用标题和正文过滤；
 6. 整理短信元数据并发送到 Telegram；
 7. 写入带 TTL 的去重标记。
+
+可选的每小时补偿会复用相同的过滤、拦截和 KV 状态。它会等待一段时间再处理新消息，
+而且只扫描有界的近期窗口。只有操作员设置启用时间并明确开启后，该功能才会运行。
+详细配置见 [配置说明](docs/configuration.md#missed-message-recovery)。
 
 配置 `INBOX_TOKEN` 后才能访问受保护 inbox：
 

@@ -34,6 +34,7 @@ a relay token and forwards the request without storing the body.
 - Removes recognized device metadata from Telegram messages.
 - Applies configurable intercept rules before notification.
 - Can place selected messages in a token-protected inbox with a six-hour TTL.
+- Can recover a bounded set of recent messages missed by realtime delivery.
 - Can delete bounded sets of old PushPlus records on a Cloudflare Cron trigger.
 - Includes manual GitHub Actions workflows for deployment and backfill.
 
@@ -168,6 +169,11 @@ Messages pass through these stages:
 5. apply title and body filters;
 6. normalize SMS metadata and send the result to Telegram;
 7. store a deduplication marker with a bounded TTL.
+
+Optional hourly recovery uses the same filters, intercept rules, and KV state.
+It waits before considering a new message and processes only a bounded recent
+window. Recovery is disabled until an operator sets an activation timestamp and
+enables it explicitly. See [Configuration](docs/configuration.md#missed-message-recovery).
 
 The protected inbox is available only when `INBOX_TOKEN` is configured:
 

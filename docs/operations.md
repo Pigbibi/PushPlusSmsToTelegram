@@ -49,8 +49,8 @@ The deployment workflow sets `RELAY_TOKEN` but does not create a fork-specific
 `WORKER_ORIGIN` to that fork's Worker origin in the Cloudflare Pages project.
 The value persists across later deployments.
 
-Optional repository variables mirror the intercept and cleanup settings in
-[Configuration](configuration.md).
+Optional repository variables mirror the intercept, recovery, and cleanup
+settings in [Configuration](configuration.md).
 
 ## PushPlus webhook helper
 
@@ -102,6 +102,26 @@ npm run forward
 ```
 
 Review output before setting `DRY_RUN=false`.
+
+## Hourly recovery
+
+Keep realtime webhook delivery as the primary path. Enable recovery only after
+the Worker has valid PushPlus, Telegram, state, and KV configuration.
+
+1. Deploy with `PUSHPLUS_RECOVERY_ENABLED=false`.
+2. Set `PUSHPLUS_RECOVERY_NOT_BEFORE` to the current ISO-8601 timestamp with a
+   timezone.
+3. Set a narrow `PUSHPLUS_RECOVERY_TITLE_KEYWORD` when the PushPlus account
+   contains unrelated messages.
+4. Set `PUSHPLUS_RECOVERY_ENABLED=true` and deploy again.
+5. Check Worker logs for the `pushplus_recovery` event after the next hourly
+   trigger.
+
+The log reports scanned candidates and separate forwarded, intercepted,
+filtered, duplicate, empty, and failed counts. Disable recovery first when
+investigating unexpected selection or duplicate delivery; existing realtime
+webhooks continue to work. Set `PUSHPLUS_RECOVERY_ALERT_ENABLED=false` when
+operators prefer log-only recovery reporting.
 
 ## Health and troubleshooting
 
