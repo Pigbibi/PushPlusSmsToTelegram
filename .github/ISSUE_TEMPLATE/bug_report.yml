@@ -1,0 +1,45 @@
+name: Bug report
+description: Report reproducible forwarding behavior
+title: "[Bug]: "
+labels: [bug]
+body:
+  - type: checkboxes
+    attributes:
+      label: Before submitting
+      options:
+        - label: I searched existing issues and read the operations guide.
+          required: true
+        - label: I removed tokens, origins, chat IDs, phone numbers, and SMS content.
+          required: true
+        - label: This is not a security vulnerability.
+          required: true
+  - type: textarea
+    attributes:
+      label: Summary
+    validations:
+      required: true
+  - type: textarea
+    attributes:
+      label: Steps to reproduce
+    validations:
+      required: true
+  - type: dropdown
+    attributes:
+      label: Delivery path
+      options: [Direct Worker, Pages relay, GitHub Actions backfill]
+    validations:
+      required: true
+  - type: textarea
+    attributes:
+      label: Expected and actual behavior
+    validations:
+      required: true
+  - type: textarea
+    attributes:
+      label: Redacted logs or request shape
+      render: text
+  - type: input
+    attributes:
+      label: Commit
+    validations:
+      required: true
