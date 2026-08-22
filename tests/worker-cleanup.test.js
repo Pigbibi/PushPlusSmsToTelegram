@@ -61,7 +61,7 @@ test('scheduled cleanup deletes only old forwarded PushPlus messages', async () 
 
   try {
     const pending = [];
-    await worker.scheduled({}, {
+    await worker.scheduled({ cron: '17 3 * * *' }, {
       PUSHPLUS_CLEANUP_ENABLED: 'true',
       PUSHPLUS_CLEANUP_RETENTION_DAYS: '90',
       PUSHPLUS_CLEANUP_TITLE_KEYWORD: '短信转发',
@@ -99,7 +99,7 @@ test('scheduled cleanup is disabled by default', async () => {
 
   try {
     const pending = [];
-    await worker.scheduled({}, {}, {
+    await worker.scheduled({ cron: '17 3 * * *' }, {}, {
       waitUntil: promise => pending.push(promise),
     });
     await Promise.all(pending);

@@ -103,6 +103,42 @@ curl -H "Authorization: Bearer $INBOX_TOKEN" \
 The equivalent `/pushplus/messages` path is also accepted. Do not place the
 token in query strings, logs, or repository variables.
 
+## Missed-message recovery
+
+The Worker can poll the PushPlus Open API once an hour for recent messages that
+did not reach the realtime webhook. Recovered messages use the normal filters,
+intercept rules, Telegram delivery, and KV deduplication path.
+
+Recovery is off by default and fails closed without an activation timestamp:
+
+| Variable | Default | Purpose |
+| --- | --- | --- |
+| `PUSHPLUS_RECOVERY_ENABLED` | `false` | Enable the hourly recovery job |
+| `PUSHPLUS_RECOVERY_NOT_BEFORE` | required when enabled | ISO-8601 timestamp; never consider an older record |
+| `PUSHPLUS_RECOVERY_LOOKBACK_HOURS` | `48` | Maximum age of records considered; maximum 720 hours |
+| `PUSHPLUS_RECOVERY_MIN_AGE_MINUTES` | `10` | Wait before treating a message as missed |
+| `PUSHPLUS_RECOVERY_PAGE_SIZE` | `50` | Records read per page; maximum 50 |
+| `PUSHPLUS_RECOVERY_MAX_PAGES` | `2` | Maximum pages scanned per run; maximum 20 |
+| `PUSHPLUS_RECOVERY_MAX_MESSAGES` | `20` | Maximum candidates processed per run; maximum 50 |
+| `PUSHPLUS_RECOVERY_TITLE_KEYWORD` | message title filter | Limit recovery to matching titles |
+| `PUSHPLUS_RECOVERY_ALERT_ENABLED` | `true` | Send a summary only when recovery forwards a message |
+
+Set `PUSHPLUS_TOKEN`, `PUSHPLUS_SECRET_KEY`, `STATE_SECRET`, and the Telegram
+delivery secrets before enabling recovery. Use a current timestamp with an
+explicit timezone for `PUSHPLUS_RECOVERY_NOT_BEFORE`; this prevents the first
+run from replaying older account history.
+
+The default hourly trigger runs at minute 31. Recovery waits at least ten
+minutes and rechecks KV immediately before processing each candidate. This
+reduces overlap with a delayed webhook, but it is not a transaction across
+independent Worker invocations, so consumers should still tolerate a rare
+duplicate.
+
+With alerts enabled, only a run that actually forwards at least one message
+sends a Telegram summary. Set `PUSHPLUS_RECOVERY_ALERT_ENABLED=false` to keep
+all recovery reporting in Worker logs. Filtered, intercepted, duplicate, empty,
+and failed outcomes never produce a summary alert.
+
 ## PushPlus record cleanup
 
 The example Wrangler configuration includes a daily Cron trigger, but cleanup
