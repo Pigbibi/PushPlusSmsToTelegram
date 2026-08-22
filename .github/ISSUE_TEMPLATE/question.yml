@@ -1,0 +1,23 @@
+name: Usage question
+description: Ask for help with a documented deployment
+title: "[Question]: "
+labels: [question]
+body:
+  - type: checkboxes
+    attributes:
+      label: Before submitting
+      options:
+        - label: I read the README and operations guide and searched existing issues.
+          required: true
+        - label: I removed tokens, origins, chat IDs, phone numbers, and SMS content.
+          required: true
+  - type: textarea
+    attributes:
+      label: Question
+    validations:
+      required: true
+  - type: textarea
+    attributes:
+      label: Deployment path and checks already performed
+    validations:
+      required: true
