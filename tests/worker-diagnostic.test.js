@@ -86,3 +86,39 @@ test('handled diagnostic rejects invalid identifiers and unsupported methods', a
   }), env, {});
   assert.equal(unsupported.status, 405);
 });
+
+test('Telegram diagnostic uses Worker-held credentials and returns no chat metadata', async () => {
+  const { default: worker } = await loadWorker();
+  const originalFetch = globalThis.fetch;
+  let requestedUrl = '';
+  globalThis.fetch = async url => {
+    requestedUrl = String(url);
+    return Response.json({
+      ok: true,
+      result: { id: 'private-chat-id', title: 'private-chat-title' },
+    });
+  };
+  const env = {
+    INBOX_TOKEN: 'inbox-token',
+    TELEGRAM_BOT_TOKEN: 'telegram-token',
+    TELEGRAM_CHAT_ID: 'chat-id',
+  };
+
+  try {
+    const unauthorized = await worker.fetch(new Request(
+      'https://worker.test/diagnostics/telegram',
+      { method: 'POST' },
+    ), env, {});
+    assert.equal(unauthorized.status, 401);
+
+    const response = await worker.fetch(new Request(
+      'https://worker.test/diagnostics/telegram',
+      { method: 'POST', headers: { authorization: 'Bearer inbox-token' } },
+    ), env, {});
+    assert.equal(response.status, 200);
+    assert.deepEqual(await response.json(), { code: 200, reachable: true });
+    assert.match(requestedUrl, /\/bottelegram-token\/getChat\?chat_id=chat-id$/);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
