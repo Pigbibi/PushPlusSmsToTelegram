@@ -26,6 +26,8 @@ test('deployment exposes direct-ingress auth and bounded Telegram retry settings
   const wrangler = read('wrangler.example.toml');
   assert.match(workflow, /secrets\.SMSFORWARDER_WEBHOOK_SECRET/);
   assert.match(workflow, /wrangler secret put SMSFORWARDER_WEBHOOK_SECRET/);
+  assert.match(workflow, /secrets\.HARDWARE_WEBHOOK_TOKEN/);
+  assert.match(workflow, /wrangler secret put HARDWARE_WEBHOOK_TOKEN/);
   for (const setting of [
     'SMSFORWARDER_MAX_CLOCK_SKEW_SECONDS',
     'TELEGRAM_RETRY_ATTEMPTS',
