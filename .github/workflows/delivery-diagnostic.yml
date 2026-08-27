@@ -17,8 +17,9 @@ jobs:
     env:
       PUSHPLUS_TOKEN: ${{ secrets.PUSHPLUS_TOKEN }}
       PUSHPLUS_SECRET_KEY: ${{ secrets.PUSHPLUS_SECRET_KEY }}
+      RELAY_TOKEN: ${{ secrets.RELAY_TOKEN }}
       PUSHPLUS_WEBHOOK_URL: https://pushplus-sms-to-telegram.pages.dev/pushplus/webhook/${{ secrets.RELAY_TOKEN }}
-      PUSHPLUS_VPS_PROBE_URL: ${{ vars.PUSHPLUS_VPS_PROBE_URL || '' }}
+      PUSHPLUS_VPS_RELAY_BASE_URL: ${{ vars.PUSHPLUS_VPS_RELAY_BASE_URL || '' }}
 
     steps:
       - uses: actions/checkout@v6
@@ -60,8 +61,8 @@ jobs:
           });
           NODE
 
-      - name: Probe PushPlus-to-VPS connectivity
-        if: env.PUSHPLUS_VPS_PROBE_URL != ''
+      - name: Probe PushPlus-to-VPS relay delivery
+        if: env.PUSHPLUS_VPS_RELAY_BASE_URL != ''
         continue-on-error: true
         run: |
           node <<'NODE'
@@ -105,6 +106,9 @@ jobs:
           }
 
           async function main() {
+            if (!process.env.PUSHPLUS_VPS_RELAY_BASE_URL || !process.env.RELAY_TOKEN) {
+              throw new Error('Missing VPS relay diagnostic configuration');
+            }
             const access = await requestJson('https://www.pushplus.plus/api/common/openApi/getAccessKey', {
               method: 'POST',
               headers: { accept: 'application/json', 'content-type': 'application/json' },
@@ -120,12 +124,12 @@ jobs:
             const existing = (list?.data?.list || []).find(item => item.webhookCode === webhookCode);
             const webhook = {
               webhookCode,
-              webhookName: 'VPS连接诊断',
+              webhookName: 'VPS转发诊断',
               webhookType: 12,
-              webhookUrl: process.env.PUSHPLUS_VPS_PROBE_URL,
-              httpMethod: 'GET',
+              webhookUrl: `${process.env.PUSHPLUS_VPS_RELAY_BASE_URL.replace(/\/$/, '')}/${process.env.RELAY_TOKEN}`,
+              httpMethod: 'POST',
               headers: '',
-              body: '',
+              body: '标题：{title}\n链接：{url}\n\n{content}',
             };
             if (existing?.id) {
               await pushPlusOpen(accessKey, '/api/open/webhook/edit', { id: existing.id, ...webhook });
@@ -140,8 +144,13 @@ jobs:
                 headers: { accept: 'application/json', 'content-type': 'application/json' },
                 body: JSON.stringify({
                   token: process.env.PUSHPLUS_TOKEN,
-                  title: 'VPS连接诊断',
-                  content: `Connectivity trial ${trial}`,
+                  title: '短信转发',
+                  content: [
+                    `PushPlus 经 VPS 到 Telegram 完整诊断消息 ${trial}/3`,
+                    '发件号码: DIAGNOSTIC-VPS',
+                    `发件时间: ${new Date().toISOString()}`,
+                    '#SMS',
+                  ].join('\n'),
                   channel: 'webhook',
                   option: webhookCode,
                 }),
@@ -149,8 +158,8 @@ jobs:
               if (!submitted.data) throw new Error('PushPlus probe did not return a message identifier');
               if (await waitForResult(accessKey, submitted.data) === 2) succeeded += 1;
             }
-            console.log(`PushPlus-to-VPS probe succeeded ${succeeded}/3 times.`);
-            if (succeeded !== 3) throw new Error('PushPlus-to-VPS connectivity is not reliable enough');
+            console.log(`PushPlus-to-VPS relay probe succeeded ${succeeded}/3 times.`);
+            if (succeeded !== 3) throw new Error('PushPlus-to-VPS relay is not reliable enough');
           }
 
           main().catch(error => {
