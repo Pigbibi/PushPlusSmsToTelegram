@@ -147,8 +147,8 @@ function pickField(text, labels) {
 
 function parseSmsFields(text) {
   return {
-    sender: pickField(text, ['发件号码', '发信号码', '发送号码', 'sender', 'from']),
-    sentAt: pickField(text, ['发件时间', '发信时间', '发送时间', 'sentAt', 'time']),
+    sender: pickField(text, ['发件号码', '发信号码', '发送号码', '发送者', 'sender', 'from']),
+    sentAt: pickField(text, ['发件时间', '发信时间', '发送时间', '时间', 'sentAt', 'time']),
   };
 }
 
@@ -372,9 +372,11 @@ function extractSmsContent(text) {
     '发件号码',
     '发信号码',
     '发送号码',
+    '发送者',
     '发件时间',
     '发信时间',
     '发送时间',
+    '时间',
     '本机号码',
     '开机时长',
     '运营商',
@@ -1060,6 +1062,29 @@ function callbackToken(request, url) {
   return url.searchParams.get('token') || '';
 }
 
+function hardwareWebhookToken(request, url) {
+  const auth = request.headers.get('authorization') || '';
+  if (auth.toLowerCase().startsWith('bearer ')) return auth.slice(7).trim();
+  const pathPrefix = '/device/webhook/';
+  if (url.pathname.startsWith(pathPrefix)) {
+    return decodeURIComponent(url.pathname.slice(pathPrefix.length));
+  }
+  return url.searchParams.get('token') || '';
+}
+
+async function tokensEqual(candidate, expected) {
+  const encoder = new TextEncoder();
+  const [candidateHash, expectedHash] = await Promise.all([
+    crypto.subtle.digest('SHA-256', encoder.encode(String(candidate || ''))),
+    crypto.subtle.digest('SHA-256', encoder.encode(String(expected || ''))),
+  ]);
+  const left = new Uint8Array(candidateHash);
+  const right = new Uint8Array(expectedHash);
+  let mismatch = String(candidate || '').length ^ String(expected || '').length;
+  for (let index = 0; index < left.length; index += 1) mismatch |= left[index] ^ right[index];
+  return mismatch === 0;
+}
+
 function shortCodeFromUrl(url) {
   const match = String(url || '').match(/\/shortMessage\/([^/?#]+)/);
   return match ? decodeURIComponent(match[1]) : '';
@@ -1152,6 +1177,43 @@ async function processSmsForwarderWebhook(request, env) {
     sourceLabel: 'SMS',
     title: '短信转发',
     text: smsForwarderText(payload),
+  });
+  return pushPlusSuccessResponse();
+}
+
+async function processHardwareWebhook(request, env, url) {
+  if (request.method !== 'POST') {
+    return jsonResponse({ code: 405, msg: 'method not allowed' }, 405);
+  }
+  const secret = String(env.HARDWARE_WEBHOOK_TOKEN || '');
+  if (!secret) throw new Error('Missing env: HARDWARE_WEBHOOK_TOKEN');
+  if (!await tokensEqual(hardwareWebhookToken(request, url), secret)) {
+    return jsonResponse({ code: 401, msg: 'unauthorized' }, 401);
+  }
+
+  let payload;
+  try {
+    payload = await parseWebhookPayload(request);
+  } catch {
+    return jsonResponse({ code: 400, msg: 'invalid payload' }, 400);
+  }
+  const sourceId = String(payload.sourceId || payload.source_id || '').trim();
+  const sender = String(payload.sender || payload.from || '').trim();
+  const sentAt = String(
+    payload.sentAt || payload.sent_at || payload.timestamp || payload.time || '',
+  ).trim();
+  const content = String(
+    payload.content || payload.message || payload.text || '',
+  ).trim();
+  if (!content || sourceId.length > 256 || sender.length > 256 || sentAt.length > 128 || content.length > 64_000) {
+    return jsonResponse({ code: 400, msg: 'invalid SMS payload' }, 400);
+  }
+
+  await forwardPushPlusMessage(env, {
+    sourceId: sourceId ? `hardware:${sourceId}` : '',
+    sourceLabel: 'SMS',
+    title: '短信转发',
+    text: smsForwarderText({ content, sender, sentAt }),
   });
   return pushPlusSuccessResponse();
 }
@@ -1251,6 +1313,14 @@ export default {
         return await processSmsForwarderWebhook(request, env);
       } catch (err) {
         console.error(`SmsForwarder webhook failed: ${err.message}`);
+        return jsonResponse({ code: 500, msg: 'internal error' }, 500);
+      }
+    }
+    if (url.pathname === '/device/webhook' || url.pathname.startsWith('/device/webhook/')) {
+      try {
+        return await processHardwareWebhook(request, env, url);
+      } catch (err) {
+        console.error(`Hardware webhook failed: ${err.message}`);
         return jsonResponse({ code: 500, msg: 'internal error' }, 500);
       }
     }

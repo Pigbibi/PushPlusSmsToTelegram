@@ -17,10 +17,37 @@ and non-sensitive defaults.
 | `PUSHPLUS_TOKEN` | for cleanup | PushPlus user token |
 | `PUSHPLUS_SECRET_KEY` | for cleanup | PushPlus Open API secret key |
 | `SMSFORWARDER_WEBHOOK_SECRET` | for direct ingress | HMAC secret shared only with the SmsForwarder webhook channel |
+| `HARDWARE_WEBHOOK_TOKEN` | for SIM gateway ingress | Random bearer/path token shared only with the hardware gateway |
 
 Use independent random values for callback, inbox, and state secrets. Rotating
 `STATE_SECRET` changes deduplication keys and may allow old messages to be
 handled again.
+
+## Hardware SIM gateway webhook
+
+The hardware endpoint accepts the fixed POST JSON format used by common
+ESP32/ML307 SMS gateways:
+
+```json
+{
+  "sender": "10086",
+  "message": "SMS body",
+  "timestamp": "2026-08-28 12:00:00"
+}
+```
+
+Configure the channel URL as
+`https://your-worker.example.com/device/webhook/YOUR_HARDWARE_WEBHOOK_TOKEN`
+and store the same random value as the Worker secret
+`HARDWARE_WEBHOOK_TOKEN`. The endpoint also accepts a bearer header or a
+`token` query parameter, but the path form works with gateways that only allow
+a URL to be configured. Only POST requests with a valid token are accepted.
+
+Put this standard `POST JSON` channel before the existing PushPlus channel.
+Use broadcast mode when available so PushPlus remains an independent audit and
+recovery copy. Both paths share the SMS fingerprint, interception leases,
+Telegram retries, and deduplication, so one SMS is normally delivered to
+Telegram only once.
 
 ## SmsForwarder direct webhook
 

@@ -117,6 +117,15 @@ Direct custom-webhook endpoint:
 https://your-worker.example.com/pushplus/webhook/YOUR_CALLBACK_TOKEN
 ```
 
+Hardware SIM gateway endpoint (standard POST JSON):
+
+```text
+https://your-worker.example.com/device/webhook/YOUR_HARDWARE_WEBHOOK_TOKEN
+```
+
+Keep the existing PushPlus channel enabled and put this direct channel first;
+see [Configuration](docs/configuration.md#hardware-sim-gateway-webhook).
+
 Signed SmsForwarder endpoint:
 
 ```text

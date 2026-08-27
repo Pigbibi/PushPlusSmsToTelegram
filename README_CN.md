@@ -118,6 +118,16 @@ https://your-worker.example.com/health
 https://your-worker.example.com/pushplus/webhook/YOUR_CALLBACK_TOKEN
 ```
 
+插 SIM 卡硬件网关直连接口（标准 POST JSON）：
+
+```text
+https://your-worker.example.com/device/webhook/YOUR_HARDWARE_WEBHOOK_TOKEN
+```
+
+设备新增“POST JSON”通道并把它排在现有 PushPlus 通道之前；支持广播策略时选择
+“广播”，让两条链路同时保留，Worker 会统一去重。详细配置见
+[配置文档](docs/configuration.md#hardware-sim-gateway-webhook)。
+
 SmsForwarder 直连 webhook：
 
 ```text
