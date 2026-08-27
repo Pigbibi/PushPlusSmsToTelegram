@@ -18,6 +18,7 @@ jobs:
       PUSHPLUS_TOKEN: ${{ secrets.PUSHPLUS_TOKEN }}
       PUSHPLUS_SECRET_KEY: ${{ secrets.PUSHPLUS_SECRET_KEY }}
       PUSHPLUS_WEBHOOK_URL: https://pushplus-sms-to-telegram.pages.dev/pushplus/webhook/${{ secrets.RELAY_TOKEN }}
+      PUSHPLUS_VPS_PROBE_URL: ${{ vars.PUSHPLUS_VPS_PROBE_URL || '' }}
 
     steps:
       - uses: actions/checkout@v6
@@ -51,6 +52,105 @@ jobs:
               senderFieldRecords: messages.filter(message => /发件(?:号码|人|号)?\s*[:：]/.test(message.text)).length,
             };
             console.log(JSON.stringify(summary));
+          }
+
+          main().catch(error => {
+            console.error(error.message);
+            process.exit(1);
+          });
+          NODE
+
+      - name: Probe PushPlus-to-VPS connectivity
+        if: env.PUSHPLUS_VPS_PROBE_URL != ''
+        continue-on-error: true
+        run: |
+          node <<'NODE'
+          const sleep = milliseconds => new Promise(resolve => setTimeout(resolve, milliseconds));
+          const webhookCode = 'vps-connectivity-diagnostic';
+
+          async function requestJson(url, options = {}) {
+            const response = await fetch(url, {
+              ...options,
+              signal: AbortSignal.timeout(15_000),
+            });
+            const data = await response.json().catch(() => ({}));
+            if (!response.ok) throw new Error(`HTTP ${response.status}`);
+            if (data.code !== 200) throw new Error(`API code ${data.code ?? 'unknown'}`);
+            return data;
+          }
+
+          async function pushPlusOpen(accessKey, pathname, body) {
+            return requestJson(`https://www.pushplus.plus${pathname}`, {
+              method: 'POST',
+              headers: {
+                'access-key': accessKey,
+                accept: 'application/json',
+                'content-type': 'application/json',
+              },
+              body: JSON.stringify(body),
+            });
+          }
+
+          async function waitForResult(accessKey, shortCode) {
+            for (let attempt = 1; attempt <= 20; attempt += 1) {
+              const result = await requestJson(
+                `https://www.pushplus.plus/api/open/message/sendMessageResult?shortCode=${encodeURIComponent(shortCode)}`,
+                { headers: { 'access-key': accessKey, accept: 'application/json' } },
+              );
+              const status = Number(result?.data?.status);
+              if (status === 2 || status === 3) return status;
+              if (attempt < 20) await sleep(1_000);
+            }
+            return 0;
+          }
+
+          async function main() {
+            const access = await requestJson('https://www.pushplus.plus/api/common/openApi/getAccessKey', {
+              method: 'POST',
+              headers: { accept: 'application/json', 'content-type': 'application/json' },
+              body: JSON.stringify({
+                token: process.env.PUSHPLUS_TOKEN,
+                secretKey: process.env.PUSHPLUS_SECRET_KEY,
+              }),
+            });
+            const accessKey = access?.data?.accessKey;
+            if (!accessKey) throw new Error('Missing PushPlus access key');
+
+            const list = await pushPlusOpen(accessKey, '/api/open/webhook/list', { current: 1, pageSize: 50 });
+            const existing = (list?.data?.list || []).find(item => item.webhookCode === webhookCode);
+            const webhook = {
+              webhookCode,
+              webhookName: 'VPS连接诊断',
+              webhookType: 12,
+              webhookUrl: process.env.PUSHPLUS_VPS_PROBE_URL,
+              httpMethod: 'GET',
+              headers: '',
+              body: '',
+            };
+            if (existing?.id) {
+              await pushPlusOpen(accessKey, '/api/open/webhook/edit', { id: existing.id, ...webhook });
+            } else {
+              await pushPlusOpen(accessKey, '/api/open/webhook/add', webhook);
+            }
+
+            let succeeded = 0;
+            for (let trial = 1; trial <= 3; trial += 1) {
+              const submitted = await requestJson('https://www.pushplus.plus/send', {
+                method: 'POST',
+                headers: { accept: 'application/json', 'content-type': 'application/json' },
+                body: JSON.stringify({
+                  token: process.env.PUSHPLUS_TOKEN,
+                  title: 'VPS连接诊断',
+                  content: `Connectivity trial ${trial}`,
+                  channel: 'webhook',
+                  option: webhookCode,
+                }),
+              });
+              if (!submitted.data) throw new Error('PushPlus probe did not return a message identifier');
+              if (await waitForResult(accessKey, submitted.data) === 2) succeeded += 1;
+            }
+            console.log(`PushPlus-to-VPS probe succeeded ${succeeded}/3 times.`);
+            if (succeeded !== 3) throw new Error('PushPlus-to-VPS connectivity is not reliable enough');
           }
 
           main().catch(error => {
