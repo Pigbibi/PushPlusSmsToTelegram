@@ -159,3 +159,16 @@ test('matches custom JSON intercept rule', () => {
   assert.equal(interceptShouldSilence({ action: 'store' }), false);
   assert.equal(interceptShouldStore({ action: 'silence-store' }), true);
 });
+
+test('matches Guangdong SSO OTP with its built-in preset', () => {
+  const rule = findInterceptRule({
+    title: '短信转发',
+    text: '广东政务服务统一身份认证验证码是123456\n发件号码: 10690000',
+  }, loadInterceptRules({
+    SMS_INTERCEPT_PRESETS: 'guangdong-sso-auth',
+  }));
+
+  assert.equal(rule?.name, 'guangdong-sso-auth');
+  assert.equal(interceptShouldSilence(rule), true);
+  assert.equal(interceptShouldStore(rule), true);
+});

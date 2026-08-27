@@ -13,12 +13,81 @@ const DEFAULT_RECOVERY_MAX_PAGES = 2;
 const DEFAULT_RECOVERY_MAX_MESSAGES = 20;
 const RECOVERY_CRON = '31 * * * *';
 const CLEANUP_CRON = '17 3 * * *';
+const INTERCEPT_LEASE_STORAGE_PREFIX = 'lease:';
+const DEFAULT_INTERCEPT_LEASE_TTL_SECONDS = 60 * 60;
+const MAX_INTERCEPT_LEASE_TTL_SECONDS = 2 * 60 * 60;
+const LEASED_INTERCEPT_PRESETS = new Set([
+  'telecom-claim-silent',
+  'guangdong-sso-auth',
+]);
 
 function jsonResponse(body, status = 200) {
   return new Response(JSON.stringify(body), {
     status,
     headers: { 'content-type': 'application/json; charset=utf-8' },
   });
+}
+
+export class InterceptLeaseCoordinator {
+  constructor(ctx) {
+    this.ctx = ctx;
+  }
+
+  async pruneExpired(now = Date.now()) {
+    const leases = await this.ctx.storage.list({ prefix: INTERCEPT_LEASE_STORAGE_PREFIX });
+    const expired = [];
+    for (const [key, value] of leases) {
+      if (!Number(value?.expiresAt) || Number(value.expiresAt) <= now) expired.push(key);
+    }
+    if (expired.length) await this.ctx.storage.delete(expired);
+    return leases;
+  }
+
+  async fetch(request) {
+    const url = new URL(request.url);
+    const now = Date.now();
+    const leases = await this.pruneExpired(now);
+    if (request.method === 'GET' && url.pathname === '/active') {
+      const presets = new Set();
+      for (const [key, value] of leases) {
+        if (Number(value?.expiresAt) <= now) continue;
+        const suffix = String(key).slice(INTERCEPT_LEASE_STORAGE_PREFIX.length);
+        const separator = suffix.indexOf(':');
+        const preset = separator === -1 ? '' : suffix.slice(0, separator);
+        if (LEASED_INTERCEPT_PRESETS.has(preset)) presets.add(preset);
+      }
+      return jsonResponse({ code: 200, presets: [...presets] });
+    }
+
+    const parsed = parseInterceptLeasePath(url.pathname.replace(/^\/leases/, '/intercepts/leases'));
+    if (!parsed) return jsonResponse({ code: 404, msg: 'not found' }, 404);
+    if (parsed.error) return jsonResponse({ code: 400, msg: parsed.error }, 400);
+    const key = `${INTERCEPT_LEASE_STORAGE_PREFIX}${parsed.preset}:${parsed.leaseId}`;
+    if (request.method === 'PUT') {
+      const body = await request.json().catch(() => ({}));
+      const requestedTtl = body.ttlSeconds === undefined
+        ? DEFAULT_INTERCEPT_LEASE_TTL_SECONDS
+        : Number(body.ttlSeconds);
+      if (!Number.isFinite(requestedTtl) || requestedTtl < 60) {
+        return jsonResponse({ code: 400, msg: 'invalid ttlSeconds' }, 400);
+      }
+      const ttlSeconds = Math.min(Math.floor(requestedTtl), MAX_INTERCEPT_LEASE_TTL_SECONDS);
+      const expiresAtMs = now + ttlSeconds * 1000;
+      await this.ctx.storage.put(key, { expiresAt: expiresAtMs });
+      return jsonResponse({
+        code: 200,
+        msg: 'ok',
+        preset: parsed.preset,
+        active: true,
+        expiresAt: new Date(expiresAtMs).toISOString(),
+      });
+    }
+    if (request.method === 'DELETE') {
+      await this.ctx.storage.delete(key);
+      return jsonResponse({ code: 200, msg: 'ok', preset: parsed.preset, active: false });
+    }
+    return jsonResponse({ code: 405, msg: 'method not allowed' }, 405);
+  }
 }
 
 function pushPlusSuccessResponse() {
@@ -201,6 +270,24 @@ function telecomClaimPresetRules(env) {
   ];
 }
 
+function guangdongSsoPresetRules(env) {
+  const rule = {
+    name: 'guangdong-sso-auth',
+    action: 'silence-store',
+    textIncludesAll: ['验证码'],
+    textIncludesAny: ['统一身份认证', '广东政务服务', '粤省事', '政务服务网'],
+  };
+  if (env.GUANGDONG_SMS_SENDER) rule.senderIncludes = env.GUANGDONG_SMS_SENDER;
+  if (env.GUANGDONG_SMS_KEYWORD) rule.textIncludesAny = [env.GUANGDONG_SMS_KEYWORD];
+  return [rule];
+}
+
+function interceptPresetRules(preset, env) {
+  if (preset === 'telecom-claim-silent') return telecomClaimPresetRules(env);
+  if (preset === 'guangdong-sso-auth') return guangdongSsoPresetRules(env);
+  return [];
+}
+
 function parseCustomRules(value) {
   if (!value) return [];
   const parsed = JSON.parse(value);
@@ -212,10 +299,8 @@ function loadInterceptRules(env) {
   if (isTruthy(env.TELECOM_CLAIM_SILENT)) presets.push('telecom-claim-silent');
 
   const rules = [];
-  for (const preset of presets) {
-    if (preset === 'telecom-claim-silent') {
-      rules.push(...telecomClaimPresetRules(env));
-    }
+  for (const preset of new Set(presets)) {
+    rules.push(...interceptPresetRules(preset, env));
   }
   rules.push(...parseCustomRules(env.SMS_INTERCEPT_RULES));
   return rules;
@@ -223,6 +308,32 @@ function loadInterceptRules(env) {
 
 function findInterceptRule(message, env) {
   return loadInterceptRules(env).find(rule => messageMatchesRule(message, rule)) || null;
+}
+
+function interceptLeaseCoordinator(env) {
+  if (!env.INTERCEPT_LEASES) throw new Error('Missing Durable Object binding: INTERCEPT_LEASES');
+  if (typeof env.INTERCEPT_LEASES.getByName === 'function') {
+    return env.INTERCEPT_LEASES.getByName('global');
+  }
+  const id = env.INTERCEPT_LEASES.idFromName('global');
+  return env.INTERCEPT_LEASES.get(id);
+}
+
+async function activeInterceptLeasePresets(env) {
+  if (!env.INTERCEPT_LEASES) return [];
+  const response = await interceptLeaseCoordinator(env).fetch('https://intercept-leases.internal/active');
+  if (!response.ok) throw new Error(`Intercept lease lookup failed: HTTP ${response.status}`);
+  const data = await response.json();
+  return Array.isArray(data.presets) ? data.presets : [];
+}
+
+async function findEffectiveInterceptRule(message, env) {
+  const staticRule = findInterceptRule(message, env);
+  if (staticRule) return staticRule;
+  const leasedPresets = await activeInterceptLeasePresets(env);
+  if (!leasedPresets.length) return null;
+  const leasedRules = leasedPresets.flatMap(preset => interceptPresetRules(preset, env));
+  return leasedRules.find(rule => messageMatchesRule(message, rule)) || null;
 }
 
 function interceptAction(rule) {
@@ -636,6 +747,41 @@ function authorizeInboxRequest(request, env, url) {
   return url.searchParams.get('token') === expected;
 }
 
+function authorizeInterceptLeaseRequest(request, env) {
+  const expected = inboxAuthToken(env);
+  if (!expected) return false;
+  const auth = request.headers.get('authorization') || '';
+  return auth.toLowerCase().startsWith('bearer ') && auth.slice(7).trim() === expected;
+}
+
+function parseInterceptLeasePath(pathname) {
+  const match = pathname.match(/^\/intercepts\/leases\/([^/]+)\/([^/]+)$/);
+  if (!match) return null;
+  const preset = decodeURIComponent(match[1]);
+  const leaseId = decodeURIComponent(match[2]);
+  if (!LEASED_INTERCEPT_PRESETS.has(preset)) return { error: 'unsupported preset' };
+  if (!/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/.test(leaseId)) return { error: 'invalid lease id' };
+  return { preset, leaseId };
+}
+
+async function processInterceptLease(request, env, url) {
+  if (!authorizeInterceptLeaseRequest(request, env)) {
+    return jsonResponse({ code: 401, msg: 'unauthorized' }, 401);
+  }
+  const parsed = parseInterceptLeasePath(url.pathname);
+  if (!parsed) return jsonResponse({ code: 404, msg: 'not found' }, 404);
+  if (parsed.error) return jsonResponse({ code: 400, msg: parsed.error }, 400);
+  const body = request.method === 'PUT' ? await request.text() : undefined;
+  return interceptLeaseCoordinator(env).fetch(new Request(
+    `https://intercept-leases.internal/leases/${encodeURIComponent(parsed.preset)}/${encodeURIComponent(parsed.leaseId)}`,
+    {
+      method: request.method,
+      headers: body === undefined ? {} : { 'content-type': 'application/json' },
+      body,
+    },
+  ));
+}
+
 async function storeInboxMessage(env, message) {
   if (!env.FORWARDED_KV) throw new Error('Missing KV binding: FORWARDED_KV');
   const text = message.text || '';
@@ -691,7 +837,7 @@ async function forwardPushPlusMessage(env, message) {
     text = await fetchPushPlusDetail(env, message.shortCode);
   }
   if (!text) return 'empty';
-  const interceptRule = findInterceptRule({ ...message, text }, env);
+  const interceptRule = await findEffectiveInterceptRule({ ...message, text }, env);
   if (interceptRule) {
     if (interceptShouldStore(interceptRule)) {
       await storeInboxMessage(env, { ...message, text });
@@ -858,6 +1004,14 @@ export default {
     if (url.pathname === '/messages' || url.pathname === '/pushplus/messages') {
       try {
         return await processMessages(request, env, url);
+      } catch (err) {
+        console.error(err.message);
+        return jsonResponse({ code: 500, msg: 'internal error' }, 500);
+      }
+    }
+    if (url.pathname.startsWith('/intercepts/leases/')) {
+      try {
+        return await processInterceptLease(request, env, url);
       } catch (err) {
         console.error(err.message);
         return jsonResponse({ code: 500, msg: 'internal error' }, 500);

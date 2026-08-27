@@ -90,6 +90,42 @@ Actions:
 `SMS_INTERCEPT_PRESETS=telecom-claim-silent` stores and silences recognized
 Beijing Telecom verification and success messages. It is disabled by default.
 
+`guangdong-sso-auth` is also available as a built-in preset for Guangdong SSO
+verification messages. Static presets remain active until the next deployment
+removes them, so workflow automation should use a lease instead.
+
+## Workflow-scoped intercept leases
+
+An authenticated workflow can activate a supported intercept preset for a
+bounded period without changing repository variables or redeploying the
+Worker:
+
+```http
+PUT /intercepts/leases/<preset>/<lease-id>
+Authorization: Bearer <INBOX_TOKEN>
+Content-Type: application/json
+
+{"ttlSeconds":3600}
+```
+
+Release the same lease in an always-run cleanup step:
+
+```http
+DELETE /intercepts/leases/<preset>/<lease-id>
+Authorization: Bearer <INBOX_TOKEN>
+```
+
+Supported presets are `telecom-claim-silent` and `guangdong-sso-auth`. Lease
+IDs may contain letters, numbers, dots, underscores, and hyphens. Each lease is
+stored independently in a strongly consistent Durable Object, so activation is
+visible before the acquire request returns and one workflow cannot release
+another workflow's lease. TTL is clamped to two hours and protects against
+cancelled workflows whose cleanup does not run. A preset remains active while
+any of its leases exists.
+
+Lease writes accept only a bearer token; query-string authentication is not
+accepted. Reading `/messages` keeps its existing authentication behavior.
+
 ## Protected inbox
 
 Stored entries live in the `FORWARDED_KV` namespace for six hours. Requests must

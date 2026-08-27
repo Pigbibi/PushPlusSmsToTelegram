@@ -28,7 +28,7 @@ MESSAGE_TITLE_KEYWORD = "短信转发"
 # PUSHPLUS_CLEANUP_TITLE_KEYWORD = "短信转发"
 # PUSHPLUS_CLEANUP_REQUIRE_FORWARDED = "true"
 
-# Optional generic intercept rules. Matching rules can silence messages before Telegram notification.
+# Optional long-lived intercept rules. Workflow automation should prefer bounded leases.
 # SMS_INTERCEPT_PRESETS = "telecom-claim-silent"
 # TELECOM_SUCCESS_SMS_SENDER = "10000"
 # SMS_INTERCEPT_RULES = '[{"name":"bank-otp","action":"silence","senderIncludes":"95588","textIncludesAll":["验证码"]}]'
@@ -39,3 +39,11 @@ crons = ["31 * * * *", "17 3 * * *"]
 [[kv_namespaces]]
 binding = "FORWARDED_KV"
 id = "replace-with-your-kv-namespace-id"
+
+[[durable_objects.bindings]]
+name = "INTERCEPT_LEASES"
+class_name = "InterceptLeaseCoordinator"
+
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["InterceptLeaseCoordinator"]
