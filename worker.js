@@ -984,6 +984,24 @@ async function processHandledDiagnostic(request, env) {
   return jsonResponse({ code: 200, handled });
 }
 
+async function processTelegramDiagnostic(request, env) {
+  if (!authorizeInterceptLeaseRequest(request, env)) {
+    return jsonResponse({ code: 401, msg: 'unauthorized' }, 401);
+  }
+  if (request.method !== 'POST') {
+    return jsonResponse({ code: 405, msg: 'method not allowed' }, 405);
+  }
+  requireEnv(env, 'TELEGRAM_BOT_TOKEN');
+  requireEnv(env, 'TELEGRAM_CHAT_ID');
+  const url = `https://api.telegram.org/bot${env.TELEGRAM_BOT_TOKEN}/getChat?chat_id=${encodeURIComponent(env.TELEGRAM_CHAT_ID)}`;
+  const response = await fetch(url, { signal: AbortSignal.timeout(DEFAULT_TELEGRAM_TIMEOUT_MS) });
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok || data.ok !== true) {
+    throw new Error(`Telegram destination check failed: ${data.description || response.status}`);
+  }
+  return jsonResponse({ code: 200, reachable: true });
+}
+
 async function forwardPushPlusMessage(env, message) {
   requireEnv(env, 'STATE_SECRET');
   if (!env.FORWARDED_KV) throw new Error('Missing KV binding: FORWARDED_KV');
@@ -1263,6 +1281,14 @@ export default {
     if (url.pathname === '/diagnostics/handled') {
       try {
         return await processHandledDiagnostic(request, env);
+      } catch (err) {
+        console.error(err.message);
+        return jsonResponse({ code: 500, msg: 'internal error' }, 500);
+      }
+    }
+    if (url.pathname === '/diagnostics/telegram') {
+      try {
+        return await processTelegramDiagnostic(request, env);
       } catch (err) {
         console.error(err.message);
         return jsonResponse({ code: 500, msg: 'internal error' }, 500);

@@ -61,7 +61,9 @@ keeps the bundled Pages relay as the default.
 The scheduled `delivery-monitor.yml` workflow runs an hourly quiet probe. It
 checks the Worker health endpoint, sends a filtered request through the VPS
 relay, confirms a default-channel PushPlus message reaches final status 2, and
-calls Telegram `getChat` without posting a message. The monitor title and body
+asks the Worker to call Telegram `getChat` without posting a message. Telegram
+credentials remain only in the Worker; the monitor authenticates with the
+existing inbox bearer token. The monitor title and body
 do not match production SMS filters, so successful runs create no Telegram
 notification. A failed run remains visible in GitHub Actions.
 

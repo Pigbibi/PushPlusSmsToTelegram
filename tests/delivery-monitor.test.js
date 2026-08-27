@@ -13,10 +13,12 @@ test('scheduled monitor checks production ingress quietly', () => {
   assert.match(workflow, /13 \* \* \* \*/);
   assert.match(workflow, /PUSHPLUS_VPS_RELAY_BASE_URL/);
   assert.match(workflow, /sendMessageResult/);
-  assert.match(workflow, /getChat/);
+  assert.match(workflow, /diagnostics\/telegram/);
+  assert.match(workflow, /secrets\.INBOX_TOKEN/);
   assert.match(workflow, /Relay health monitor/);
   assert.doesNotMatch(workflow, /#SMS/);
   assert.doesNotMatch(workflow, /api\.telegram\.org[^\n]*sendMessage/);
+  assert.doesNotMatch(workflow, /secrets\.TELEGRAM_BOT_TOKEN/);
 });
 
 test('deployment exposes direct-ingress auth and bounded Telegram retry settings', () => {
