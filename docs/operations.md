@@ -124,6 +124,12 @@ duplicate delivery; existing realtime webhooks continue to work. Set
 `PUSHPLUS_RECOVERY_ALERT_ENABLED=false` when operators prefer log-only recovery
 reporting.
 
+The production diagnostic uses the bearer-protected
+`POST /diagnostics/handled` endpoint to verify a specific synthetic message's
+KV marker after PushPlus reports a realtime webhook failure. The endpoint
+accepts only `{ "sourceId": "..." }`, returns only a boolean handled state,
+and never exposes the stored value or message content.
+
 ## Health and troubleshooting
 
 Worker and relay health endpoints return a small JSON response:
