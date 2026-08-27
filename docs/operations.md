@@ -52,6 +52,12 @@ The value persists across later deployments.
 Optional repository variables mirror the intercept, recovery, and cleanup
 settings in [Configuration](configuration.md).
 
+Set `PUSHPLUS_WEBHOOK_BASE_URL` to an HTTPS relay base path when PushPlus cannot
+reliably reach the generated `pages.dev` endpoint. The deployment appends the
+secret `RELAY_TOKEN` at runtime, so the repository variable must not contain a
+token, query string, or message data. If the variable is unset, deployment
+keeps the bundled Pages relay as the default.
+
 ## PushPlus webhook helper
 
 `npm run configure:pushplus` creates or updates a PushPlus custom webhook. By
