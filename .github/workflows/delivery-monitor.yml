@@ -1,0 +1,124 @@
+name: Monitor SMS delivery path
+
+on:
+  schedule:
+    - cron: '13 * * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: pushplus-sms-delivery-monitor
+  cancel-in-progress: false
+
+jobs:
+  monitor:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      PUSHPLUS_TOKEN: ${{ secrets.PUSHPLUS_TOKEN }}
+      PUSHPLUS_SECRET_KEY: ${{ secrets.PUSHPLUS_SECRET_KEY }}
+      RELAY_TOKEN: ${{ secrets.RELAY_TOKEN }}
+      TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+      TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+      PUSHPLUS_VPS_RELAY_BASE_URL: ${{ vars.PUSHPLUS_VPS_RELAY_BASE_URL || '' }}
+      WORKER_ORIGIN: https://pushplus-sms-to-telegram.pigbibi.workers.dev
+      MONITOR_SOURCE_ID: delivery-monitor-${{ github.run_id }}-${{ github.run_attempt }}
+
+    steps:
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 22
+
+      - name: Check quiet production delivery paths
+        run: |
+          node <<'NODE'
+          const sleep = milliseconds => new Promise(resolve => setTimeout(resolve, milliseconds));
+
+          async function requestJson(url, options = {}) {
+            const response = await fetch(url, {
+              ...options,
+              signal: AbortSignal.timeout(15_000),
+            });
+            const data = await response.json().catch(() => ({}));
+            if (!response.ok) throw new Error(`HTTP ${response.status} ${new URL(url).pathname}`);
+            return data;
+          }
+
+          async function main() {
+            const required = [
+              'PUSHPLUS_TOKEN',
+              'PUSHPLUS_SECRET_KEY',
+              'RELAY_TOKEN',
+              'TELEGRAM_BOT_TOKEN',
+              'TELEGRAM_CHAT_ID',
+              'PUSHPLUS_VPS_RELAY_BASE_URL',
+            ];
+            for (const name of required) {
+              if (!process.env[name]) throw new Error(`Missing monitor configuration: ${name}`);
+            }
+
+            const workerHealth = await requestJson(`${process.env.WORKER_ORIGIN}/health`);
+            if (workerHealth.code !== 200) throw new Error('Worker health check failed');
+
+            const relayUrl = `${process.env.PUSHPLUS_VPS_RELAY_BASE_URL.replace(/\/$/, '')}/${process.env.RELAY_TOKEN}`;
+            const relayHealth = await requestJson(relayUrl, {
+              method: 'POST',
+              headers: { accept: 'application/json', 'content-type': 'application/json' },
+              body: JSON.stringify({
+                shortCode: `${process.env.MONITOR_SOURCE_ID}-vps`,
+                title: 'Relay health monitor',
+                content: 'Quiet relay reachability check',
+              }),
+            });
+            if (relayHealth.code !== 200) throw new Error('VPS relay health check failed');
+
+            const submitted = await requestJson('https://www.pushplus.plus/send', {
+              method: 'POST',
+              headers: { accept: 'application/json', 'content-type': 'application/json' },
+              body: JSON.stringify({
+                token: process.env.PUSHPLUS_TOKEN,
+                title: 'Relay health monitor',
+                content: `Quiet PushPlus reachability check ${process.env.MONITOR_SOURCE_ID}`,
+              }),
+            });
+            if (submitted.code !== 200 || !submitted.data) throw new Error('PushPlus monitor request was rejected');
+
+            const access = await requestJson('https://www.pushplus.plus/api/common/openApi/getAccessKey', {
+              method: 'POST',
+              headers: { accept: 'application/json', 'content-type': 'application/json' },
+              body: JSON.stringify({
+                token: process.env.PUSHPLUS_TOKEN,
+                secretKey: process.env.PUSHPLUS_SECRET_KEY,
+              }),
+            });
+            const accessKey = access?.data?.accessKey;
+            if (access.code !== 200 || !accessKey) throw new Error('Could not obtain PushPlus monitor access key');
+
+            let deliveryStatus = 0;
+            for (let attempt = 1; attempt <= 20; attempt += 1) {
+              const result = await requestJson(
+                `https://www.pushplus.plus/api/open/message/sendMessageResult?shortCode=${encodeURIComponent(submitted.data)}`,
+                { headers: { accept: 'application/json', 'access-key': accessKey } },
+              );
+              if (result.code !== 200) throw new Error('Could not query PushPlus monitor status');
+              deliveryStatus = Number(result?.data?.status);
+              if (deliveryStatus === 2 || deliveryStatus === 3) break;
+              if (attempt < 20) await sleep(1_000);
+            }
+            if (deliveryStatus !== 2) throw new Error(`PushPlus production webhook status ${deliveryStatus || 'pending'}`);
+
+            const telegramChat = await requestJson(
+              `https://api.telegram.org/bot${process.env.TELEGRAM_BOT_TOKEN}/getChat?chat_id=${encodeURIComponent(process.env.TELEGRAM_CHAT_ID)}`,
+            );
+            if (telegramChat.ok !== true) throw new Error('Telegram destination access check failed');
+
+            console.log('Worker, VPS relay, PushPlus production webhook, and Telegram destination checks passed.');
+          }
+
+          main().catch(error => {
+            console.error(error.message);
+            process.exit(1);
+          });
+          NODE

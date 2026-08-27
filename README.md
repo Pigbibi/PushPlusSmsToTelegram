@@ -26,10 +26,23 @@ SMS forwarder → PushPlus → Cloudflare Pages relay → Worker → Telegram
 Use the relay only when PushPlus cannot reach the Worker endpoint. It validates
 a relay token and forwards the request without storing the body.
 
+Recommended resilient ingress:
+
+```text
+SMS forwarder ──primary──→ signed direct Worker webhook ──→ Telegram
+              └─on final failure─→ PushPlus → relay → Worker ──┘
+```
+
+SmsForwarder 3.2.0 or newer can run the direct webhook first and use PushPlus
+only after the primary channel finally fails. Both paths reuse the same filters,
+workflow-scoped intercepts, Telegram delivery, and content-fingerprint dedupe.
+
 ## Features
 
 - Receives PushPlus custom webhooks and callback notifications.
+- Receives HMAC-signed, timestamped direct SmsForwarder webhooks.
 - Uses Cloudflare KV to deduplicate messages before Telegram delivery.
+- Deduplicates equivalent direct and PushPlus copies by SMS content fingerprint.
 - Filters by title or body keyword.
 - Removes recognized device metadata from Telegram messages.
 - Applies configurable intercept rules before notification.
@@ -37,6 +50,7 @@ a relay token and forwards the request without storing the body.
 - Can recover a bounded set of recent messages missed by realtime delivery.
 - Can delete bounded sets of old PushPlus records on a Cloudflare Cron trigger.
 - Includes manual GitHub Actions workflows for deployment and backfill.
+- Quietly monitors the Worker, relay, PushPlus production webhook, and Telegram destination hourly.
 
 ## Requirements
 
@@ -66,6 +80,7 @@ npx wrangler secret put CALLBACK_TOKEN
 npx wrangler secret put TELEGRAM_BOT_TOKEN
 npx wrangler secret put TELEGRAM_CHAT_ID
 npx wrangler secret put STATE_SECRET
+npx wrangler secret put SMSFORWARDER_WEBHOOK_SECRET
 ```
 
 Generate long random values for callback and state secrets:
@@ -101,6 +116,17 @@ Direct custom-webhook endpoint:
 ```text
 https://your-worker.example.com/pushplus/webhook/YOUR_CALLBACK_TOKEN
 ```
+
+Signed SmsForwarder endpoint:
+
+```text
+https://your-worker.example.com/smsforwarder/webhook
+```
+
+Configure the SmsForwarder channel with JSON fields for `sourceId`, `sender`,
+`sentAt`, `content`, `timestamp`, and `sign`; see
+[Configuration](docs/configuration.md#smsforwarder-direct-webhook). The channel
+secret must match `SMSFORWARDER_WEBHOOK_SECRET`.
 
 Prefer a Cloudflare custom domain when PushPlus cannot reach a `workers.dev`
 address.
