@@ -17,6 +17,10 @@ const PUSHPLUS_ACCESS_KEY_REFRESH_MARGIN_SECONDS = 5 * 60;
 const INTERCEPT_LEASE_STORAGE_PREFIX = 'lease:';
 const DEFAULT_INTERCEPT_LEASE_TTL_SECONDS = 60 * 60;
 const MAX_INTERCEPT_LEASE_TTL_SECONDS = 2 * 60 * 60;
+const DEFAULT_SMSFORWARDER_MAX_CLOCK_SKEW_SECONDS = 60 * 60;
+const DEFAULT_TELEGRAM_RETRY_ATTEMPTS = 3;
+const DEFAULT_TELEGRAM_RETRY_DELAY_MS = 500;
+const DEFAULT_TELEGRAM_TIMEOUT_MS = 8_000;
 const LEASED_INTERCEPT_PRESETS = new Set([
   'telecom-claim-silent',
   'guangdong-sso-auth',
@@ -406,7 +410,7 @@ function buildTelegramText(message) {
   const fields = parseSmsFields(message.text);
   const smsContent = extractSmsContent(message.text);
   return [
-    '📩 <b>PushPlus SMS</b>',
+    `📩 <b>${escapeTelegramHtml(message.sourceLabel || 'PushPlus SMS')}</b>`,
     `发件人：${escapeTelegramHtml(fields.sender || '-')}`,
     `发件时间：${escapeTelegramHtml(fields.sentAt || '-')}`,
     '',
@@ -438,6 +442,47 @@ async function sha256Hex(input) {
 
 async function dedupeKey(shortCode, env) {
   return `pushplus:${await sha256Hex(`${env.STATE_SECRET || ''}:${shortCode}`)}`;
+}
+
+async function messageSourceIds(message, text) {
+  const sourceIds = new Set();
+  const explicitSourceId = message.sourceId || message.shortCode || message.url || '';
+  if (explicitSourceId) sourceIds.add(String(explicitSourceId));
+  if (message.shortCode) sourceIds.add(String(message.shortCode));
+  if (!sourceIds.size && text) {
+    sourceIds.add(`content:${await sha256Hex(`${message.title || ''}\n${text}`)}`);
+  }
+
+  const fields = parseSmsFields(text);
+  const content = extractSmsContent(text).trim();
+  const sender = String(fields.sender || '').replace(/\s+/g, '');
+  const sentAtDigits = String(fields.sentAt || '').replace(/\D/g, '').slice(0, 14);
+  if (sender && sentAtDigits.length >= 12 && content) {
+    const fingerprint = await sha256Hex([
+      'sms-fingerprint-v1',
+      sender,
+      sentAtDigits,
+      content.replace(/\r\n/g, '\n'),
+    ].join('\n'));
+    sourceIds.add(`sms-fingerprint:${fingerprint}`);
+  }
+  return [...sourceIds];
+}
+
+async function dedupeKeys(sourceIds, env) {
+  return Promise.all(sourceIds.map(sourceId => dedupeKey(sourceId, env)));
+}
+
+async function existingDedupeValue(keys, env) {
+  for (const key of keys) {
+    const value = await env.FORWARDED_KV.get(key);
+    if (value) return value;
+  }
+  return '';
+}
+
+async function putDedupeKeys(keys, value, env, expirationTtl = FORWARDED_TTL_SECONDS) {
+  await Promise.all(keys.map(key => env.FORWARDED_KV.put(key, value, { expirationTtl })));
 }
 
 async function inboxKey(sourceId, receivedAt, env) {
@@ -785,22 +830,48 @@ async function recoverPushPlusMessages(env) {
   };
 }
 
+function sleep(milliseconds) {
+  return new Promise(resolve => setTimeout(resolve, milliseconds));
+}
+
 async function sendTelegram({ env, text }) {
   const url = `https://api.telegram.org/bot${env.TELEGRAM_BOT_TOKEN}/sendMessage`;
-  const res = await fetch(url, {
-    method: 'POST',
-    headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({
-      chat_id: env.TELEGRAM_CHAT_ID,
-      text,
-      parse_mode: 'HTML',
-      disable_web_page_preview: true,
-    }),
-  });
-  const data = await res.json().catch(() => ({}));
-  if (!res.ok || data.ok === false) {
-    throw new Error(`Telegram sendMessage failed: ${data.description || res.status}`);
+  const attempts = numberEnv(env, 'TELEGRAM_RETRY_ATTEMPTS', DEFAULT_TELEGRAM_RETRY_ATTEMPTS, { min: 1, max: 4 });
+  const baseDelayMs = numberEnv(env, 'TELEGRAM_RETRY_DELAY_MS', DEFAULT_TELEGRAM_RETRY_DELAY_MS, { min: 0, max: 5_000 });
+  const timeoutMs = numberEnv(env, 'TELEGRAM_TIMEOUT_MS', DEFAULT_TELEGRAM_TIMEOUT_MS, { min: 1_000, max: 10_000 });
+  let lastError = new Error('Telegram sendMessage failed');
+
+  for (let attempt = 1; attempt <= attempts; attempt += 1) {
+    let res;
+    let data = {};
+    try {
+      res = await fetch(url, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          chat_id: env.TELEGRAM_CHAT_ID,
+          text,
+          parse_mode: 'HTML',
+          disable_web_page_preview: true,
+        }),
+        signal: AbortSignal.timeout(timeoutMs),
+      });
+      data = await res.json().catch(() => ({}));
+      if (res.ok && data.ok !== false) return data?.result || null;
+      lastError = new Error(`Telegram sendMessage failed: ${data.description || res.status}`);
+      const retryable = res.status === 408 || res.status === 429 || res.status >= 500;
+      if (!retryable || attempt >= attempts) throw lastError;
+    } catch (error) {
+      lastError = error instanceof Error ? error : new Error(String(error));
+      if (res && res.status !== 408 && res.status !== 429 && res.status < 500) throw lastError;
+      if (attempt >= attempts) throw lastError;
+    }
+
+    const retryAfterMs = Number(data?.parameters?.retry_after || 0) * 1000;
+    const delayMs = Math.min(5_000, retryAfterMs || baseDelayMs * (2 ** (attempt - 1)));
+    if (delayMs > 0) await sleep(delayMs);
   }
+  throw lastError;
 }
 
 function requireEnv(env, name) {
@@ -917,43 +988,46 @@ async function forwardPushPlusMessage(env, message) {
   requireEnv(env, 'STATE_SECRET');
   if (!env.FORWARDED_KV) throw new Error('Missing KV binding: FORWARDED_KV');
 
-  const sourceId = message.sourceId || message.shortCode || message.url || await sha256Hex(`${message.title || ''}\n${message.text || ''}`);
-  if (!sourceId) return 'empty';
-  const key = await dedupeKey(sourceId, env);
-  if (await env.FORWARDED_KV.get(key)) return 'duplicates';
-
   let text = message.text || '';
   if (!text && message.shortCode) {
     text = await fetchPushPlusDetail(env, message.shortCode);
   }
   if (!text) return 'empty';
+  const sourceIds = await messageSourceIds(message, text);
+  if (!sourceIds.length) return 'empty';
+  const keys = await dedupeKeys(sourceIds, env);
+  const existingValue = await existingDedupeValue(keys, env);
+  if (existingValue) {
+    await putDedupeKeys(keys, `duplicate:${String(existingValue).slice(0, 128)}`, env);
+    return 'duplicates';
+  }
   const interceptRule = await findEffectiveInterceptRule({ ...message, text }, env);
   if (interceptRule) {
     if (interceptShouldStore(interceptRule)) {
       await storeInboxMessage(env, { ...message, text });
     }
     if (interceptShouldSilence(interceptRule)) {
-      await env.FORWARDED_KV.put(key, `intercept:${interceptRule.name || 'silence'}`, { expirationTtl: FORWARDED_TTL_SECONDS });
+      await putDedupeKeys(keys, `intercept:${interceptRule.name || 'silence'}`, env);
       return 'intercepted';
     }
   }
 
   if (env.MESSAGE_TITLE_KEYWORD && !String(message.title || '').includes(env.MESSAGE_TITLE_KEYWORD)) {
-    await env.FORWARDED_KV.put(key, 'ignored', { expirationTtl: 60 * 60 * 24 * 30 });
+    await putDedupeKeys(keys, 'ignored', env, 60 * 60 * 24 * 30);
     return 'filtered';
   }
   if (env.MESSAGE_BODY_KEYWORD && !text.includes(env.MESSAGE_BODY_KEYWORD)) {
-    await env.FORWARDED_KV.put(key, 'ignored', { expirationTtl: 60 * 60 * 24 * 30 });
+    await putDedupeKeys(keys, 'ignored', env, 60 * 60 * 24 * 30);
     return 'filtered';
   }
 
   requireEnv(env, 'TELEGRAM_BOT_TOKEN');
   requireEnv(env, 'TELEGRAM_CHAT_ID');
-  const telegramMessage = { title: message.title || '短信转发', text };
+  const telegramMessage = { title: message.title || '短信转发', sourceLabel: message.sourceLabel, text };
   for (const chunk of splitTelegramText(buildTelegramText(telegramMessage))) {
     await sendTelegram({ env, text: chunk });
   }
-  await env.FORWARDED_KV.put(key, new Date().toISOString(), { expirationTtl: FORWARDED_TTL_SECONDS });
+  await putDedupeKeys(keys, new Date().toISOString(), env);
   return 'forwarded';
 }
 
@@ -983,6 +1057,85 @@ async function parseWebhookPayload(request) {
     return Object.fromEntries(new URLSearchParams(raw));
   }
   return { content: raw };
+}
+
+function decodeBase64Signature(value) {
+  let normalized = String(value || '').trim().replace(/ /g, '+');
+  try {
+    normalized = decodeURIComponent(normalized);
+  } catch {
+    return null;
+  }
+  try {
+    return Uint8Array.from(atob(normalized), character => character.charCodeAt(0));
+  } catch {
+    return null;
+  }
+}
+
+async function authorizeSmsForwarderPayload(payload, env) {
+  const secret = String(env.SMSFORWARDER_WEBHOOK_SECRET || '');
+  if (!secret) throw new Error('Missing env: SMSFORWARDER_WEBHOOK_SECRET');
+  const timestamp = Number(payload.timestamp);
+  const signature = decodeBase64Signature(payload.sign || payload.signature);
+  if (!Number.isFinite(timestamp) || !signature?.length) return false;
+  const maxClockSkewSeconds = numberEnv(
+    env,
+    'SMSFORWARDER_MAX_CLOCK_SKEW_SECONDS',
+    DEFAULT_SMSFORWARDER_MAX_CLOCK_SKEW_SECONDS,
+    { min: 60, max: 24 * 60 * 60 },
+  );
+  if (Math.abs(Date.now() - timestamp) > maxClockSkewSeconds * 1000) return false;
+  const key = await crypto.subtle.importKey(
+    'raw',
+    new TextEncoder().encode(secret),
+    { name: 'HMAC', hash: 'SHA-256' },
+    false,
+    ['verify'],
+  );
+  return crypto.subtle.verify(
+    'HMAC',
+    key,
+    signature,
+    new TextEncoder().encode(`${timestamp}\n${secret}`),
+  );
+}
+
+function smsForwarderText(payload) {
+  const content = htmlToText(
+    payload.content || payload.message || payload.orgContent || payload.org_content || payload.text || '',
+  );
+  const sender = String(payload.sender || payload.from || '').trim();
+  const sentAt = String(
+    payload.sentAt || payload.sent_at || payload.receiveTime || payload.receive_time || '',
+  ).trim();
+  const fields = parseSmsFields(content);
+  const lines = [content];
+  if (sender && !fields.sender) lines.push(`发件号码: ${sender}`);
+  if (sentAt && !fields.sentAt) lines.push(`发件时间: ${sentAt}`);
+  if (!/(?:^|\n)\s*#SMS\b/i.test(content)) lines.push('#SMS');
+  return lines.filter(Boolean).join('\n');
+}
+
+async function processSmsForwarderWebhook(request, env) {
+  if (request.method !== 'POST') {
+    return jsonResponse({ code: 405, msg: 'method not allowed' }, 405);
+  }
+  const payload = await parseWebhookPayload(request);
+  if (!await authorizeSmsForwarderPayload(payload, env)) {
+    return jsonResponse({ code: 401, msg: 'unauthorized' }, 401);
+  }
+  const sourceId = String(payload.sourceId || payload.source_id || '').trim();
+  if (sourceId.length > 256) {
+    return jsonResponse({ code: 400, msg: 'invalid sourceId' }, 400);
+  }
+  await forwardPushPlusMessage(env, {
+    sourceId: sourceId ? `smsforwarder:${sourceId}` : '',
+    sourceLabel: 'SMS',
+    title: '短信转发',
+    text: smsForwarderText(payload),
+  });
+  return pushPlusSuccessResponse();
 }
 
 async function processCallback(request, env, url) {
@@ -1074,6 +1227,14 @@ export default {
     }
     if (url.pathname === '/') {
       return pushPlusSuccessResponse();
+    }
+    if (url.pathname === '/smsforwarder/webhook') {
+      try {
+        return await processSmsForwarderWebhook(request, env);
+      } catch (err) {
+        console.error(`SmsForwarder webhook failed: ${err.message}`);
+        return jsonResponse({ code: 500, msg: 'internal error' }, 500);
+      }
     }
     if (url.pathname === '/pushplus/callback' || url.pathname.startsWith('/pushplus/callback/')) {
       try {

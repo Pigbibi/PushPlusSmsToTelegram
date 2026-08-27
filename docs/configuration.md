@@ -16,10 +16,47 @@ and non-sensitive defaults.
 | `INBOX_TOKEN` | for `/messages` | Bearer token for the short-lived protected inbox |
 | `PUSHPLUS_TOKEN` | for cleanup | PushPlus user token |
 | `PUSHPLUS_SECRET_KEY` | for cleanup | PushPlus Open API secret key |
+| `SMSFORWARDER_WEBHOOK_SECRET` | for direct ingress | HMAC secret shared only with the SmsForwarder webhook channel |
 
 Use independent random values for callback, inbox, and state secrets. Rotating
 `STATE_SECRET` changes deduplication keys and may allow old messages to be
 handled again.
+
+## SmsForwarder direct webhook
+
+The direct endpoint is `POST /smsforwarder/webhook`. It accepts JSON or form
+payloads only after verifying SmsForwarder's HMAC-SHA256 `sign` over
+`timestamp + "\\n" + secret`. Requests outside the allowed clock window fail
+closed. The endpoint normalizes the SMS and then reuses the same filtering,
+intercept, Telegram delivery, inbox, and KV deduplication path as PushPlus.
+
+Recommended SmsForwarder JSON parameters:
+
+```json
+{
+  "sourceId": "md5([from]+[org_content]+[receive_time:yyyyMMddHHmmss]+[device_mark])",
+  "sender": "[from]",
+  "sentAt": "[receive_time:yyyy/MM/dd HH:mm:ss]",
+  "content": "[org_content]",
+  "timestamp": "[timestamp]",
+  "sign": "[sign]"
+}
+```
+
+Set the channel method to `POST`, header `Content-Type: application/json`,
+success keyword `success`, and the channel secret to the exact value stored as
+`SMSFORWARDER_WEBHOOK_SECRET`. Put this channel before PushPlus and select
+SmsForwarder's "stop after success" execution logic. A generated `sourceId`
+and the server-side SMS fingerprint make phone retries idempotent and suppress
+the later PushPlus copy when both routes carry the same sender, receive time,
+and SMS content.
+
+| Variable | Default | Purpose |
+| --- | --- | --- |
+| `SMSFORWARDER_MAX_CLOCK_SKEW_SECONDS` | `3600` | Maximum accepted request age or device clock drift |
+| `TELEGRAM_RETRY_ATTEMPTS` | `3` | Total bounded Telegram attempts; maximum 4 |
+| `TELEGRAM_RETRY_DELAY_MS` | `500` | Initial exponential retry delay; maximum 5000 ms |
+| `TELEGRAM_TIMEOUT_MS` | `8000` | Timeout per Telegram attempt; maximum 10000 ms |
 
 The local webhook helper and GitHub Actions backfill also use
 `PUSHPLUS_TOKEN` and `PUSHPLUS_SECRET_KEY` as process environment variables.

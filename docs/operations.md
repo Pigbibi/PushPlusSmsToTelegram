@@ -58,6 +58,13 @@ secret `RELAY_TOKEN` at runtime, so the repository variable must not contain a
 token, query string, or message data. If the variable is unset, deployment
 keeps the bundled Pages relay as the default.
 
+The scheduled `delivery-monitor.yml` workflow runs an hourly quiet probe. It
+checks the Worker health endpoint, sends a filtered request through the VPS
+relay, confirms a default-channel PushPlus message reaches final status 2, and
+calls Telegram `getChat` without posting a message. The monitor title and body
+do not match production SMS filters, so successful runs create no Telegram
+notification. A failed run remains visible in GitHub Actions.
+
 ## PushPlus webhook helper
 
 `npm run configure:pushplus` creates or updates a PushPlus custom webhook. By
@@ -84,6 +91,15 @@ A callback contains a short code and delivery status rather than the complete
 SMS body. The Worker fetches the corresponding short-message page before
 filtering and delivery. Prefer the custom webhook path when the full
 `{content}` can be sent directly.
+
+## Direct SmsForwarder fallback architecture
+
+For SmsForwarder 3.2.0 or newer, configure the signed direct Worker webhook as
+the first sender and PushPlus as the second sender with "stop after success".
+Set three request retries on the phone. This removes PushPlus from the normal
+critical path while preserving it as an independently routed fallback through
+the VPS. The Worker still applies workflow-scoped intercept leases to both
+paths, so unrelated SMS continue to reach Telegram.
 
 ## Manual backfill
 

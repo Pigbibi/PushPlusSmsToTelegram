@@ -25,10 +25,23 @@
 只有 PushPlus 无法访问 Worker 地址时才需要 relay。relay 校验 token 后转发请求，
 不会存储短信正文。
 
+推荐的高可用入口：
+
+```text
+短信转发器 ──主通道──→ Worker 直连 webhook ──→ Telegram
+          └─主通道最终失败后─→ PushPlus → relay → Worker ──┘
+```
+
+SmsForwarder 3.2.0 以上可把直连 webhook 放在第一位、PushPlus 放在第二位，
+并将规则执行逻辑设为“成功即止”。两个入口复用相同的过滤、临时拦截、Telegram
+投递和内容指纹去重逻辑。
+
 ## 主要功能
 
 - 接收 PushPlus custom webhook 和 callback 通知。
+- 接收带 HMAC 签名和时间戳的 SmsForwarder 直连 webhook。
 - 使用 Cloudflare KV 去重。
+- 在直连和 PushPlus 入口之间按短信内容指纹去重。
 - 按标题或正文关键词过滤。
 - 从 Telegram 消息中移除可识别的设备状态元数据。
 - 在通知前应用自定义拦截规则。
@@ -36,6 +49,7 @@
 - 有界补偿实时链路漏掉的近期消息。
 - 通过 Cloudflare Cron 有界删除旧 PushPlus 记录。
 - 提供手动部署和补发用的 GitHub Actions workflow。
+- 每小时安静检查 Worker、VPS relay、PushPlus 生产 webhook 和 Telegram 会话权限。
 
 ## 运行要求
 
@@ -64,6 +78,7 @@ npx wrangler secret put CALLBACK_TOKEN
 npx wrangler secret put TELEGRAM_BOT_TOKEN
 npx wrangler secret put TELEGRAM_CHAT_ID
 npx wrangler secret put STATE_SECRET
+npx wrangler secret put SMSFORWARDER_WEBHOOK_SECRET
 ```
 
 生成随机 token：
@@ -79,6 +94,9 @@ npx wrangler secret put INBOX_TOKEN
 npx wrangler secret put PUSHPLUS_TOKEN
 npx wrangler secret put PUSHPLUS_SECRET_KEY
 ```
+
+`SMSFORWARDER_WEBHOOK_SECRET` 必须与手机 Webhook 发送通道里的 `secret` 完全一致，
+不得与 PushPlus、callback 或 inbox token 共用。
 
 ### 3. 部署 Worker
 
@@ -99,6 +117,30 @@ https://your-worker.example.com/health
 ```text
 https://your-worker.example.com/pushplus/webhook/YOUR_CALLBACK_TOKEN
 ```
+
+SmsForwarder 直连 webhook：
+
+```text
+https://your-worker.example.com/smsforwarder/webhook
+```
+
+推荐使用 `POST`、`Content-Type: application/json`，成功应答关键字填写 `success`，
+请求参数填写：
+
+```json
+{
+  "sourceId": "md5([from]+[org_content]+[receive_time:yyyyMMddHHmmss]+[device_mark])",
+  "sender": "[from]",
+  "sentAt": "[receive_time:yyyy/MM/dd HH:mm:ss]",
+  "content": "[org_content]",
+  "timestamp": "[timestamp]",
+  "sign": "[sign]"
+}
+```
+
+把全局请求失败重试设为 3 次。规则同时选择直连 Webhook 和 PushPlus，直连排第一，
+执行逻辑选择“成功即止”。Worker 只有在 Telegram 投递成功或消息被明确过滤/临时拦截
+后才返回成功。
 
 如果 PushPlus 无法访问 `workers.dev`，优先为 Worker 配置 Cloudflare custom domain。
 
@@ -154,7 +196,7 @@ npm run configure:pushplus
 
 1. 校验 webhook 或 callback token；
 2. callback 只有 short code 时，从 PushPlus 获取正文；
-3. 通过 KV 跳过已经处理的消息；
+3. 通过入口 ID 和规范化短信内容指纹跳过已经处理的消息；
 4. 应用拦截规则；
 5. 应用标题和正文过滤；
 6. 整理短信元数据并发送到 Telegram；

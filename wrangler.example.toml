@@ -7,6 +7,12 @@ compatibility_date = "2026-05-31"
 MESSAGE_BODY_KEYWORD = "#SMS"
 MESSAGE_TITLE_KEYWORD = "短信转发"
 
+# SmsForwarder direct webhook and Telegram delivery hardening.
+# SMSFORWARDER_MAX_CLOCK_SKEW_SECONDS = "3600"
+# TELEGRAM_RETRY_ATTEMPTS = "3"
+# TELEGRAM_RETRY_DELAY_MS = "500"
+# TELEGRAM_TIMEOUT_MS = "8000"
+
 # Optional best-effort hourly recovery for failed realtime webhook deliveries
 # that remain visible in the PushPlus Open API message list.
 # Recovery is disabled unless explicitly enabled and given an activation baseline.
