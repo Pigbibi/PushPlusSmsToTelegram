@@ -59,7 +59,78 @@ jobs:
           });
           NODE
 
+      - name: Send end-to-end message through PushPlus
+        run: |
+          node <<'NODE'
+          const sleep = milliseconds => new Promise(resolve => setTimeout(resolve, milliseconds));
+
+          async function requestJson(url, options = {}) {
+            const response = await fetch(url, {
+              ...options,
+              signal: AbortSignal.timeout(15_000),
+            });
+            const data = await response.json().catch(() => ({}));
+            if (!response.ok) throw new Error(`PushPlus HTTP ${response.status}`);
+            return data;
+          }
+
+          async function main() {
+            const submitted = await requestJson('https://www.pushplus.plus/send', {
+              method: 'POST',
+              headers: { 'content-type': 'application/json', accept: 'application/json' },
+              body: JSON.stringify({
+                token: process.env.PUSHPLUS_TOKEN,
+                title: '短信转发',
+                content: [
+                  'PushPlus 完整生产链路诊断消息',
+                  '发件号码: DIAGNOSTIC-PUSHPLUS',
+                  `发件时间: ${new Date().toISOString()}`,
+                  '#SMS',
+                ].join('\n'),
+              }),
+            });
+            if (submitted.code !== 200 || !submitted.data) {
+              throw new Error(`PushPlus rejected the diagnostic request (code ${submitted.code ?? 'unknown'})`);
+            }
+
+            const access = await requestJson('https://www.pushplus.plus/api/common/openApi/getAccessKey', {
+              method: 'POST',
+              headers: { 'content-type': 'application/json', accept: 'application/json' },
+              body: JSON.stringify({
+                token: process.env.PUSHPLUS_TOKEN,
+                secretKey: process.env.PUSHPLUS_SECRET_KEY,
+              }),
+            });
+            const accessKey = access?.data?.accessKey;
+            if (access.code !== 200 || !accessKey) throw new Error('Could not obtain a PushPlus access key');
+
+            for (let attempt = 1; attempt <= 20; attempt += 1) {
+              const result = await requestJson(
+                `https://www.pushplus.plus/api/open/message/sendMessageResult?shortCode=${encodeURIComponent(submitted.data)}`,
+                { headers: { accept: 'application/json', 'access-key': accessKey } },
+              );
+              if (result.code !== 200) {
+                throw new Error(`Could not query PushPlus delivery status (code ${result.code ?? 'unknown'})`);
+              }
+              const status = Number(result?.data?.status);
+              if (status === 2) {
+                console.log('PushPlus accepted the message and completed webhook delivery to Telegram.');
+                return;
+              }
+              if (status === 3) throw new Error('PushPlus reported failed webhook delivery');
+              if (attempt < 20) await sleep(2_000);
+            }
+            throw new Error('Timed out waiting for PushPlus webhook delivery');
+          }
+
+          main().catch(error => {
+            console.error(error.message);
+            process.exit(1);
+          });
+          NODE
+
       - name: Send production webhook-to-Telegram smoke message
+        if: always()
         env:
           TEST_SOURCE_ID: delivery-smoke-${{ github.run_id }}-${{ github.run_attempt }}
         run: |
