@@ -170,10 +170,11 @@ Messages pass through these stages:
 6. normalize SMS metadata and send the result to Telegram;
 7. store a deduplication marker with a bounded TTL.
 
-Optional hourly recovery uses the same filters, intercept rules, and KV state.
-It waits before considering a new message and processes only a bounded recent
-window. Recovery is disabled until an operator sets an activation timestamp and
-enables it explicitly. See [Configuration](docs/configuration.md#missed-message-recovery).
+Optional minute-level recovery uses the same filters, intercept rules, and KV
+state. It checks PushPlus delivery status and recovers only messages whose
+realtime webhook failed, within a bounded recent window. Recovery is disabled
+until an operator sets an activation timestamp and enables it explicitly. See
+[Configuration](docs/configuration.md#missed-message-recovery).
 
 The protected inbox is available only when `INBOX_TOKEN` is configured:
 

@@ -160,9 +160,10 @@ npm run configure:pushplus
 6. 整理短信元数据并发送到 Telegram；
 7. 写入带 TTL 的去重标记。
 
-可选的每小时补偿会复用相同的过滤、拦截和 KV 状态。它会等待一段时间再处理新消息，
-而且只扫描有界的近期窗口。只有操作员设置启用时间并明确开启后，该功能才会运行。
-详细配置见 [配置说明](docs/configuration.md#missed-message-recovery)。
+可选的分钟级补偿会复用相同的过滤、拦截和 KV 状态。它会检查 PushPlus 的最终投递
+状态，只补偿实时 webhook 明确失败的消息，并且只扫描有界的近期窗口。只有操作员设置
+启用时间并明确开启后，该功能才会运行。详细配置见
+[配置说明](docs/configuration.md#missed-message-recovery)。
 
 配置 `INBOX_TOKEN` 后才能访问受保护 inbox：
 
