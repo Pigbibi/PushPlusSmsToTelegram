@@ -140,6 +140,7 @@ jobs:
             }
             trap release_lease EXIT
             curl -fsS --connect-timeout 8 --max-time 20 \
+              --retry 8 --retry-delay 2 --retry-all-errors \
               -X PUT \
               -H "Authorization: Bearer $INBOX_TOKEN" \
               -H 'Content-Type: application/json' \
