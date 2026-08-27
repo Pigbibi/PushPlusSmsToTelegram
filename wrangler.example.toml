@@ -7,12 +7,13 @@ compatibility_date = "2026-05-31"
 MESSAGE_BODY_KEYWORD = "#SMS"
 MESSAGE_TITLE_KEYWORD = "短信转发"
 
-# Optional minute-level recovery for failed realtime webhook deliveries.
+# Optional best-effort hourly recovery for failed realtime webhook deliveries
+# that remain visible in the PushPlus Open API message list.
 # Recovery is disabled unless explicitly enabled and given an activation baseline.
 # PUSHPLUS_RECOVERY_ENABLED = "false"
 # PUSHPLUS_RECOVERY_NOT_BEFORE = "2026-08-22T00:00:00Z"
 # PUSHPLUS_RECOVERY_LOOKBACK_HOURS = "48"
-# PUSHPLUS_RECOVERY_MIN_AGE_MINUTES = "0"
+# PUSHPLUS_RECOVERY_MIN_AGE_MINUTES = "10"
 # PUSHPLUS_RECOVERY_PAGE_SIZE = "50"
 # PUSHPLUS_RECOVERY_MAX_PAGES = "2"
 # PUSHPLUS_RECOVERY_MAX_MESSAGES = "20"
@@ -34,7 +35,7 @@ MESSAGE_TITLE_KEYWORD = "短信转发"
 # SMS_INTERCEPT_RULES = '[{"name":"bank-otp","action":"silence","senderIncludes":"95588","textIncludesAll":["验证码"]}]'
 
 [triggers]
-crons = ["* * * * *", "17 3 * * *"]
+crons = ["31 * * * *", "17 3 * * *"]
 
 [[kv_namespaces]]
 binding = "FORWARDED_KV"

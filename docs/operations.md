@@ -109,7 +109,7 @@ npm run forward
 
 Review output before setting `DRY_RUN=false`.
 
-## Minute-level recovery
+## Best-effort hourly recovery
 
 Keep realtime webhook delivery as the primary path. Enable recovery only after
 the Worker has valid PushPlus, Telegram, state, and KV configuration.
@@ -120,7 +120,7 @@ the Worker has valid PushPlus, Telegram, state, and KV configuration.
 3. Set a narrow `PUSHPLUS_RECOVERY_TITLE_KEYWORD` when the PushPlus account
    contains unrelated messages.
 4. Set `PUSHPLUS_RECOVERY_ENABLED=true` and deploy again.
-5. Check Worker logs for the `pushplus_recovery` event after the next minute
+5. Check Worker logs for the `pushplus_recovery` event after the next hourly
    trigger.
 
 The log reports scanned candidates and separate forwarded, intercepted,
@@ -128,7 +128,8 @@ filtered, duplicate, empty, upstream-delivered, upstream-pending, and failed
 counts. Disable recovery first when investigating unexpected selection or
 duplicate delivery; existing realtime webhooks continue to work. Set
 `PUSHPLUS_RECOVERY_ALERT_ENABLED=false` when operators prefer log-only recovery
-reporting.
+reporting. Do not use this job as the primary delivery path: PushPlus can omit
+connection-timeout failures from the Open API message list.
 
 The production diagnostic uses the bearer-protected
 `POST /diagnostics/handled` endpoint to verify a specific synthetic message's

@@ -25,7 +25,7 @@ async function runScheduled(worker, event, env) {
   await Promise.all(pending);
 }
 
-test('minute recovery forwards the oldest failed webhook delivery within its cap', async () => {
+test('hourly recovery forwards the oldest visible failed webhook delivery within its cap', async () => {
   const { default: worker } = await loadWorker();
   const originalFetch = globalThis.fetch;
   const originalCrypto = Object.getOwnPropertyDescriptor(globalThis, 'crypto');
@@ -78,7 +78,7 @@ test('minute recovery forwards the oldest failed webhook delivery within its cap
   };
 
   try {
-    await runScheduled(worker, { cron: '* * * * *' }, {
+    await runScheduled(worker, { cron: '31 * * * *' }, {
       PUSHPLUS_RECOVERY_ENABLED: 'true',
       PUSHPLUS_RECOVERY_NOT_BEFORE: '2026-06-06T10:00:00.000Z',
       PUSHPLUS_RECOVERY_MIN_AGE_MINUTES: '0',
@@ -112,7 +112,7 @@ test('minute recovery forwards the oldest failed webhook delivery within its cap
   assert.equal(accessKeyCalls, 1);
 });
 
-test('minute recovery is fail-closed without an activation baseline', async () => {
+test('hourly recovery is fail-closed without an activation baseline', async () => {
   const { default: worker } = await loadWorker();
   const originalFetch = globalThis.fetch;
   let fetched = false;
@@ -122,7 +122,7 @@ test('minute recovery is fail-closed without an activation baseline', async () =
   };
 
   try {
-    await runScheduled(worker, { cron: '* * * * *' }, {
+    await runScheduled(worker, { cron: '31 * * * *' }, {
       PUSHPLUS_RECOVERY_ENABLED: 'true',
     });
   } finally {
@@ -132,7 +132,7 @@ test('minute recovery is fail-closed without an activation baseline', async () =
   assert.equal(fetched, false);
 });
 
-test('minute recovery refreshes a cached PushPlus access key once after rejection', async () => {
+test('hourly recovery refreshes a cached PushPlus access key once after rejection', async () => {
   const { default: worker } = await loadWorker();
   const originalFetch = globalThis.fetch;
   let accessKeyCalls = 0;
@@ -165,8 +165,8 @@ test('minute recovery refreshes a cached PushPlus access key once after rejectio
     FORWARDED_KV: { get: async () => null, put: async () => {} },
   };
   try {
-    await runScheduled(worker, { cron: '* * * * *' }, env);
-    await runScheduled(worker, { cron: '* * * * *' }, env);
+    await runScheduled(worker, { cron: '31 * * * *' }, env);
+    await runScheduled(worker, { cron: '31 * * * *' }, env);
   } finally {
     globalThis.fetch = originalFetch;
   }
@@ -175,7 +175,7 @@ test('minute recovery refreshes a cached PushPlus access key once after rejectio
   assert.equal(listCalls, 3);
 });
 
-test('minute recovery skips messages PushPlus reports as delivered', async () => {
+test('hourly recovery skips messages PushPlus reports as delivered', async () => {
   const { default: worker } = await loadWorker();
   const originalFetch = globalThis.fetch;
   const originalCrypto = Object.getOwnPropertyDescriptor(globalThis, 'crypto');
@@ -212,7 +212,7 @@ test('minute recovery skips messages PushPlus reports as delivered', async () =>
   };
 
   try {
-    await runScheduled(worker, { cron: '* * * * *' }, {
+    await runScheduled(worker, { cron: '31 * * * *' }, {
       PUSHPLUS_RECOVERY_ENABLED: 'true',
       PUSHPLUS_RECOVERY_NOT_BEFORE: '2026-06-06T10:00:00.000Z',
       PUSHPLUS_TOKEN: 'token',
@@ -243,17 +243,17 @@ test('minute recovery skips messages PushPlus reports as delivered', async () =>
   assert.equal(deliveryCalls, 0);
 });
 
-test('minute recovery trigger never runs record cleanup', async () => {
+test('hourly recovery trigger never runs record cleanup', async () => {
   const { default: worker } = await loadWorker();
   const originalFetch = globalThis.fetch;
   let fetched = false;
   globalThis.fetch = async () => {
     fetched = true;
-    throw new Error('minute recovery trigger must not run cleanup');
+    throw new Error('hourly recovery trigger must not run cleanup');
   };
 
   try {
-    await runScheduled(worker, { cron: '* * * * *' }, {
+    await runScheduled(worker, { cron: '31 * * * *' }, {
       PUSHPLUS_CLEANUP_ENABLED: 'true',
     });
   } finally {
@@ -304,7 +304,7 @@ test('recovery summary can be disabled without disabling delivery', async () => 
 
   try {
     const stored = new Map();
-    await runScheduled(worker, { cron: '* * * * *' }, {
+    await runScheduled(worker, { cron: '31 * * * *' }, {
       PUSHPLUS_RECOVERY_ENABLED: 'true',
       PUSHPLUS_RECOVERY_ALERT_ENABLED: 'false',
       PUSHPLUS_RECOVERY_NOT_BEFORE: '2026-06-06T10:00:00.000Z',
@@ -350,7 +350,7 @@ test('deployment exposes recovery without a maintainer-specific endpoint', () =>
     assert.match(workflow, new RegExp(setting));
     assert.match(wrangler, new RegExp(setting));
   }
-  assert.match(wrangler, /"\* \* \* \* \*"/);
+  assert.match(wrangler, /"31 \* \* \* \*"/);
   assert.match(wrangler, /"17 3 \* \* \*"/);
   assert.doesNotMatch(workflow, /sslip\.io|43\.156\.238\.238/);
   assert.doesNotMatch(wrangler, /sslip\.io|43\.156\.238\.238/);
