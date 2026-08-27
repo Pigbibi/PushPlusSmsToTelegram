@@ -117,7 +117,13 @@ jobs:
                 console.log('PushPlus accepted the message and completed webhook delivery to Telegram.');
                 return;
               }
-              if (status === 3) throw new Error('PushPlus reported failed webhook delivery');
+              if (status === 3) {
+                const detail = String(result?.data?.errorMessage || 'no detail returned')
+                  .replace(/\/pushplus\/webhook\/[^/?\s]+/gi, '/pushplus/webhook/[redacted]')
+                  .replace(/([?&](?:token|key|secret|authorization)=)[^&\s]+/gi, '$1[redacted]')
+                  .slice(0, 500);
+                throw new Error(`PushPlus reported failed webhook delivery: ${detail}`);
+              }
               if (attempt < 20) await sleep(2_000);
             }
             throw new Error('Timed out waiting for PushPlus webhook delivery');
