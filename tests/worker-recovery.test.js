@@ -25,7 +25,7 @@ async function runScheduled(worker, event, env) {
   await Promise.all(pending);
 }
 
-test('hourly recovery forwards the oldest eligible messages within its cap', async () => {
+test('minute recovery forwards the oldest failed webhook delivery within its cap', async () => {
   const { default: worker } = await loadWorker();
   const originalFetch = globalThis.fetch;
   const originalCrypto = Object.getOwnPropertyDescriptor(globalThis, 'crypto');
@@ -35,13 +35,15 @@ test('hourly recovery forwards the oldest eligible messages within its cap', asy
   const recoveredKey = await workerDedupeKey(stateSecret, 'older-unhandled');
   const stored = new Map([[handledKey, '2026-06-06T11:00:00.000Z']]);
   const telegramMessages = [];
+  let accessKeyCalls = 0;
 
   Date.now = () => Date.UTC(2026, 5, 6, 12, 0, 0);
   Object.defineProperty(globalThis, 'crypto', { value: webcrypto, configurable: true });
   globalThis.fetch = async (url, options = {}) => {
     const parsed = new URL(String(url));
     if (parsed.pathname === '/api/common/openApi/getAccessKey') {
-      return Response.json({ code: 200, msg: 'ok', data: { accessKey: 'access-key' } });
+      accessKeyCalls += 1;
+      return Response.json({ code: 200, msg: 'ok', data: { accessKey: 'access-key', expiresIn: 7200 } });
     }
     if (parsed.pathname === '/api/open/message/list') {
       assert.equal(options.method, 'POST');
@@ -61,6 +63,10 @@ test('hourly recovery forwards the oldest eligible messages within its cap', asy
         },
       });
     }
+    if (parsed.pathname === '/api/open/message/sendMessageResult') {
+      assert.equal(parsed.searchParams.get('shortCode'), 'older-unhandled');
+      return Response.json({ code: 200, msg: 'ok', data: { status: 3, errorMessage: 'connect timed out' } });
+    }
     if (parsed.pathname === '/shortMessage/older-unhandled') {
       return new Response('#SMS\n发件号码: 10086\n发件时间: 2026-06-06 19:20:00\n恢复测试');
     }
@@ -72,10 +78,10 @@ test('hourly recovery forwards the oldest eligible messages within its cap', asy
   };
 
   try {
-    await runScheduled(worker, { cron: '31 * * * *' }, {
+    await runScheduled(worker, { cron: '* * * * *' }, {
       PUSHPLUS_RECOVERY_ENABLED: 'true',
       PUSHPLUS_RECOVERY_NOT_BEFORE: '2026-06-06T10:00:00.000Z',
-      PUSHPLUS_RECOVERY_MIN_AGE_MINUTES: '10',
+      PUSHPLUS_RECOVERY_MIN_AGE_MINUTES: '0',
       PUSHPLUS_RECOVERY_MAX_MESSAGES: '1',
       PUSHPLUS_RECOVERY_TITLE_KEYWORD: '短信转发',
       MESSAGE_BODY_KEYWORD: '#SMS',
@@ -103,9 +109,10 @@ test('hourly recovery forwards the oldest eligible messages within its cap', asy
   assert.match(telegramMessages[0], /恢复测试/);
   assert.match(telegramMessages[1], /Recovered 1 message/);
   assert.equal(stored.has(recoveredKey), true);
+  assert.equal(accessKeyCalls, 1);
 });
 
-test('hourly recovery is fail-closed without an activation baseline', async () => {
+test('minute recovery is fail-closed without an activation baseline', async () => {
   const { default: worker } = await loadWorker();
   const originalFetch = globalThis.fetch;
   let fetched = false;
@@ -115,7 +122,7 @@ test('hourly recovery is fail-closed without an activation baseline', async () =
   };
 
   try {
-    await runScheduled(worker, { cron: '31 * * * *' }, {
+    await runScheduled(worker, { cron: '* * * * *' }, {
       PUSHPLUS_RECOVERY_ENABLED: 'true',
     });
   } finally {
@@ -125,7 +132,50 @@ test('hourly recovery is fail-closed without an activation baseline', async () =
   assert.equal(fetched, false);
 });
 
-test('hourly recovery does not alert when realtime delivery wins the race', async () => {
+test('minute recovery refreshes a cached PushPlus access key once after rejection', async () => {
+  const { default: worker } = await loadWorker();
+  const originalFetch = globalThis.fetch;
+  let accessKeyCalls = 0;
+  let listCalls = 0;
+
+  globalThis.fetch = async (url, options = {}) => {
+    const parsed = new URL(String(url));
+    if (parsed.pathname === '/api/common/openApi/getAccessKey') {
+      accessKeyCalls += 1;
+      return Response.json({
+        code: 200,
+        msg: 'ok',
+        data: { accessKey: `access-key-${accessKeyCalls}`, expiresIn: 7200 },
+      });
+    }
+    if (parsed.pathname === '/api/open/message/list') {
+      listCalls += 1;
+      if (listCalls === 2) return Response.json({ code: 401, msg: 'expired access key' });
+      assert.equal(options.headers['access-key'], `access-key-${accessKeyCalls}`);
+      return Response.json({ code: 200, msg: 'ok', data: { pages: 1, list: [] } });
+    }
+    throw new Error(`unexpected fetch ${parsed.pathname}`);
+  };
+
+  const env = {
+    PUSHPLUS_RECOVERY_ENABLED: 'true',
+    PUSHPLUS_RECOVERY_NOT_BEFORE: '2026-06-06T10:00:00.000Z',
+    PUSHPLUS_TOKEN: 'token',
+    PUSHPLUS_SECRET_KEY: 'secret-key',
+    FORWARDED_KV: { get: async () => null, put: async () => {} },
+  };
+  try {
+    await runScheduled(worker, { cron: '* * * * *' }, env);
+    await runScheduled(worker, { cron: '* * * * *' }, env);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+
+  assert.equal(accessKeyCalls, 2);
+  assert.equal(listCalls, 3);
+});
+
+test('minute recovery skips messages PushPlus reports as delivered', async () => {
   const { default: worker } = await loadWorker();
   const originalFetch = globalThis.fetch;
   const originalCrypto = Object.getOwnPropertyDescriptor(globalThis, 'crypto');
@@ -154,12 +204,15 @@ test('hourly recovery does not alert when realtime delivery wins the race', asyn
         },
       });
     }
+    if (parsed.pathname === '/api/open/message/sendMessageResult') {
+      return Response.json({ code: 200, msg: 'ok', data: { status: 2, errorMessage: '' } });
+    }
     deliveryCalls += 1;
     throw new Error(`unexpected delivery fetch ${parsed.pathname}`);
   };
 
   try {
-    await runScheduled(worker, { cron: '31 * * * *' }, {
+    await runScheduled(worker, { cron: '* * * * *' }, {
       PUSHPLUS_RECOVERY_ENABLED: 'true',
       PUSHPLUS_RECOVERY_NOT_BEFORE: '2026-06-06T10:00:00.000Z',
       PUSHPLUS_TOKEN: 'token',
@@ -171,7 +224,7 @@ test('hourly recovery does not alert when realtime delivery wins the race', asyn
         get: async key => {
           if (key !== racingKey) return null;
           keyReads += 1;
-          return keyReads === 1 ? null : 'handled-by-realtime-webhook';
+          return null;
         },
         put: async () => {},
       },
@@ -186,21 +239,21 @@ test('hourly recovery does not alert when realtime delivery wins the race', asyn
     Date.now = originalNow;
   }
 
-  assert.equal(keyReads, 2);
+  assert.equal(keyReads, 1);
   assert.equal(deliveryCalls, 0);
 });
 
-test('hourly trigger never runs record cleanup', async () => {
+test('minute recovery trigger never runs record cleanup', async () => {
   const { default: worker } = await loadWorker();
   const originalFetch = globalThis.fetch;
   let fetched = false;
   globalThis.fetch = async () => {
     fetched = true;
-    throw new Error('hourly trigger must not run cleanup');
+    throw new Error('minute recovery trigger must not run cleanup');
   };
 
   try {
-    await runScheduled(worker, { cron: '31 * * * *' }, {
+    await runScheduled(worker, { cron: '* * * * *' }, {
       PUSHPLUS_CLEANUP_ENABLED: 'true',
     });
   } finally {
@@ -236,6 +289,9 @@ test('recovery summary can be disabled without disabling delivery', async () => 
         },
       });
     }
+    if (parsed.pathname === '/api/open/message/sendMessageResult') {
+      return Response.json({ code: 200, msg: 'ok', data: { status: 3, errorMessage: 'connect timed out' } });
+    }
     if (parsed.pathname === '/shortMessage/alert-disabled') {
       return new Response('#SMS\n发件号码: 10086\n关闭恢复摘要测试');
     }
@@ -248,7 +304,7 @@ test('recovery summary can be disabled without disabling delivery', async () => 
 
   try {
     const stored = new Map();
-    await runScheduled(worker, { cron: '31 * * * *' }, {
+    await runScheduled(worker, { cron: '* * * * *' }, {
       PUSHPLUS_RECOVERY_ENABLED: 'true',
       PUSHPLUS_RECOVERY_ALERT_ENABLED: 'false',
       PUSHPLUS_RECOVERY_NOT_BEFORE: '2026-06-06T10:00:00.000Z',
@@ -294,7 +350,7 @@ test('deployment exposes recovery without a maintainer-specific endpoint', () =>
     assert.match(workflow, new RegExp(setting));
     assert.match(wrangler, new RegExp(setting));
   }
-  assert.match(wrangler, /"31 \* \* \* \*"/);
+  assert.match(wrangler, /"\* \* \* \* \*"/);
   assert.match(wrangler, /"17 3 \* \* \*"/);
   assert.doesNotMatch(workflow, /sslip\.io|43\.156\.238\.238/);
   assert.doesNotMatch(wrangler, /sslip\.io|43\.156\.238\.238/);

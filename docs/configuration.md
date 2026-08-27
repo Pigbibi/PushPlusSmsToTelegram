@@ -141,18 +141,20 @@ token in query strings, logs, or repository variables.
 
 ## Missed-message recovery
 
-The Worker can poll the PushPlus Open API once an hour for recent messages that
-did not reach the realtime webhook. Recovered messages use the normal filters,
-intercept rules, Telegram delivery, and KV deduplication path.
+The Worker can poll the PushPlus Open API once a minute for recent messages.
+It queries each candidate's final PushPlus delivery status and recovers only
+messages whose realtime webhook is explicitly marked failed. Recovered messages
+use the normal filters, intercept rules, Telegram delivery, and KV
+deduplication path.
 
 Recovery is off by default and fails closed without an activation timestamp:
 
 | Variable | Default | Purpose |
 | --- | --- | --- |
-| `PUSHPLUS_RECOVERY_ENABLED` | `false` | Enable the hourly recovery job |
+| `PUSHPLUS_RECOVERY_ENABLED` | `false` | Enable the minute-level recovery job |
 | `PUSHPLUS_RECOVERY_NOT_BEFORE` | required when enabled | ISO-8601 timestamp; never consider an older record |
 | `PUSHPLUS_RECOVERY_LOOKBACK_HOURS` | `48` | Maximum age of records considered; maximum 720 hours |
-| `PUSHPLUS_RECOVERY_MIN_AGE_MINUTES` | `10` | Wait before treating a message as missed |
+| `PUSHPLUS_RECOVERY_MIN_AGE_MINUTES` | `0` | Minimum message age before checking final delivery status |
 | `PUSHPLUS_RECOVERY_PAGE_SIZE` | `50` | Records read per page; maximum 50 |
 | `PUSHPLUS_RECOVERY_MAX_PAGES` | `2` | Maximum pages scanned per run; maximum 20 |
 | `PUSHPLUS_RECOVERY_MAX_MESSAGES` | `20` | Maximum candidates processed per run; maximum 50 |
@@ -164,11 +166,11 @@ delivery secrets before enabling recovery. Use a current timestamp with an
 explicit timezone for `PUSHPLUS_RECOVERY_NOT_BEFORE`; this prevents the first
 run from replaying older account history.
 
-The default hourly trigger runs at minute 31. Recovery waits at least ten
-minutes and rechecks KV immediately before processing each candidate. This
-reduces overlap with a delayed webhook, but it is not a transaction across
-independent Worker invocations, so consumers should still tolerate a rare
-duplicate.
+The default trigger runs once a minute. Status `0`/`1` messages remain pending,
+status `2` messages are left to the realtime path, and only status `3` messages
+are recovered. The Worker rechecks KV immediately before processing each failed
+candidate. Access keys are cached in memory until shortly before expiry and are
+refreshed once when an Open API call fails, keeping the polling loop bounded.
 
 With alerts enabled, only a run that actually forwards at least one message
 sends a Telegram summary. Set `PUSHPLUS_RECOVERY_ALERT_ENABLED=false` to keep

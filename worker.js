@@ -7,12 +7,13 @@ const DEFAULT_CLEANUP_PAGE_SIZE = 50;
 const DEFAULT_CLEANUP_MAX_PAGES = 10;
 const DEFAULT_CLEANUP_MAX_DELETES = 20;
 const DEFAULT_RECOVERY_LOOKBACK_HOURS = 48;
-const DEFAULT_RECOVERY_MIN_AGE_MINUTES = 10;
+const DEFAULT_RECOVERY_MIN_AGE_MINUTES = 0;
 const DEFAULT_RECOVERY_PAGE_SIZE = 50;
 const DEFAULT_RECOVERY_MAX_PAGES = 2;
 const DEFAULT_RECOVERY_MAX_MESSAGES = 20;
-const RECOVERY_CRON = '31 * * * *';
+const RECOVERY_CRON = '* * * * *';
 const CLEANUP_CRON = '17 3 * * *';
+const PUSHPLUS_ACCESS_KEY_REFRESH_MARGIN_SECONDS = 5 * 60;
 const INTERCEPT_LEASE_STORAGE_PREFIX = 'lease:';
 const DEFAULT_INTERCEPT_LEASE_TTL_SECONDS = 60 * 60;
 const MAX_INTERCEPT_LEASE_TTL_SECONDS = 2 * 60 * 60;
@@ -20,6 +21,7 @@ const LEASED_INTERCEPT_PRESETS = new Set([
   'telecom-claim-silent',
   'guangdong-sso-auth',
 ]);
+let pushPlusAccessKeyCache = null;
 
 function jsonResponse(body, status = 200) {
   return new Response(JSON.stringify(body), {
@@ -469,9 +471,18 @@ async function pushPlusJson(url, options = {}) {
   return data;
 }
 
-async function getPushPlusAccessKey(env) {
+async function getPushPlusAccessKey(env, forceRefresh = false) {
   requireEnv(env, 'PUSHPLUS_TOKEN');
   requireEnv(env, 'PUSHPLUS_SECRET_KEY');
+  const baseUrl = String(env.PUSHPLUS_BASE_URL || PUSHPLUS_BASE_URL);
+  if (
+    !forceRefresh
+    && pushPlusAccessKeyCache?.token === env.PUSHPLUS_TOKEN
+    && pushPlusAccessKeyCache?.baseUrl === baseUrl
+    && pushPlusAccessKeyCache?.expiresAt > Date.now()
+  ) {
+    return pushPlusAccessKeyCache.accessKey;
+  }
   const data = await pushPlusJson(pushPlusUrl(env, '/api/common/openApi/getAccessKey'), {
     method: 'POST',
     headers: { 'content-type': 'application/json', accept: 'application/json' },
@@ -479,7 +490,32 @@ async function getPushPlusAccessKey(env) {
   });
   const accessKey = data?.data?.accessKey;
   if (!accessKey) throw new Error('PushPlus access key response missing accessKey');
+  const rawExpiresIn = Number(data?.data?.expiresIn);
+  const expiresIn = Number.isFinite(rawExpiresIn) && rawExpiresIn > 0
+    ? rawExpiresIn
+    : 2 * 60 * 60;
+  const cacheSeconds = Math.max(60, expiresIn - PUSHPLUS_ACCESS_KEY_REFRESH_MARGIN_SECONDS);
+  pushPlusAccessKeyCache = {
+    accessKey,
+    baseUrl,
+    expiresAt: Date.now() + cacheSeconds * 1000,
+    token: env.PUSHPLUS_TOKEN,
+  };
   return accessKey;
+}
+
+async function withPushPlusAccessKey(env, operation) {
+  const accessKey = await getPushPlusAccessKey(env);
+  try {
+    return await operation(accessKey);
+  } catch (firstError) {
+    const refreshedAccessKey = await getPushPlusAccessKey(env, true);
+    try {
+      return await operation(refreshedAccessKey);
+    } catch (retryError) {
+      throw new Error(`${retryError.message}; retry after access-key refresh failed`, { cause: firstError });
+    }
+  }
 }
 
 async function listPushPlusMessages(env, accessKey, current, pageSize) {
@@ -495,6 +531,18 @@ async function listPushPlusMessages(env, accessKey, current, pageSize) {
   return {
     items: data?.data?.list || [],
     pages: Number(data?.data?.pages || 0),
+  };
+}
+
+async function getPushPlusMessageResult(env, accessKey, shortCode) {
+  const url = pushPlusUrl(env, '/api/open/message/sendMessageResult');
+  url.searchParams.set('shortCode', shortCode);
+  const data = await pushPlusJson(url, {
+    headers: { accept: 'application/json', 'access-key': accessKey },
+  });
+  return {
+    errorMessage: String(data?.data?.errorMessage || ''),
+    status: Number(data?.data?.status),
   };
 }
 
@@ -527,12 +575,13 @@ async function cleanupPushPlusMessages(env) {
     : isTruthy(env.PUSHPLUS_CLEANUP_REQUIRE_FORWARDED);
   const titleKeyword = env.PUSHPLUS_CLEANUP_TITLE_KEYWORD || env.MESSAGE_TITLE_KEYWORD || '';
   const cutoff = Date.now() - retentionDays * 24 * 60 * 60 * 1000;
-  const accessKey = await getPushPlusAccessKey(env);
-
   const candidates = [];
   let scanned = 0;
   for (let current = 1; current <= maxPages && candidates.length < maxDeletes; current += 1) {
-    const { items, pages } = await listPushPlusMessages(env, accessKey, current, pageSize);
+    const { items, pages } = await withPushPlusAccessKey(
+      env,
+      accessKey => listPushPlusMessages(env, accessKey, current, pageSize),
+    );
     if (!items.length) break;
     scanned += items.length;
 
@@ -558,7 +607,10 @@ async function cleanupPushPlusMessages(env) {
   let failed = 0;
   for (const item of candidates) {
     try {
-      await deletePushPlusMessage(env, accessKey, item.shortCode);
+      await withPushPlusAccessKey(
+        env,
+        accessKey => deletePushPlusMessage(env, accessKey, item.shortCode),
+      );
       deleted += 1;
     } catch (err) {
       failed += 1;
@@ -581,6 +633,8 @@ async function recoverPushPlusMessages(env) {
       filtered: 0,
       duplicates: 0,
       empty: 0,
+      upstreamDelivered: 0,
+      upstreamPending: 0,
       failed: 0,
     };
   }
@@ -599,6 +653,8 @@ async function recoverPushPlusMessages(env) {
       filtered: 0,
       duplicates: 0,
       empty: 0,
+      upstreamDelivered: 0,
+      upstreamPending: 0,
       failed: 0,
     };
   }
@@ -613,7 +669,7 @@ async function recoverPushPlusMessages(env) {
     env,
     'PUSHPLUS_RECOVERY_MIN_AGE_MINUTES',
     DEFAULT_RECOVERY_MIN_AGE_MINUTES,
-    { min: 1, max: 24 * 60 },
+    { min: 0, max: 24 * 60 },
   );
   const pageSize = numberEnv(
     env,
@@ -637,13 +693,15 @@ async function recoverPushPlusMessages(env) {
   const now = Date.now();
   const oldestAllowed = Math.max(notBefore, now - lookbackHours * 60 * 60 * 1000);
   const newestAllowed = now - minAgeMinutes * 60 * 1000;
-  const accessKey = await getPushPlusAccessKey(env);
   const candidates = [];
   const seen = new Set();
   let scanned = 0;
 
   for (let current = 1; current <= maxPages; current += 1) {
-    const { items, pages } = await listPushPlusMessages(env, accessKey, current, pageSize);
+    const { items, pages } = await withPushPlusAccessKey(
+      env,
+      accessKey => listPushPlusMessages(env, accessKey, current, pageSize),
+    );
     if (!items.length) break;
     scanned += items.length;
 
@@ -672,10 +730,24 @@ async function recoverPushPlusMessages(env) {
     filtered: 0,
     duplicates: 0,
     empty: 0,
+    upstreamDelivered: 0,
+    upstreamPending: 0,
     failed: 0,
   };
   for (const item of candidates.slice(0, maxMessages)) {
     try {
+      const delivery = await withPushPlusAccessKey(
+        env,
+        accessKey => getPushPlusMessageResult(env, accessKey, item.shortCode),
+      );
+      if (delivery.status === 2) {
+        counts.upstreamDelivered += 1;
+        continue;
+      }
+      if (delivery.status !== 3) {
+        counts.upstreamPending += 1;
+        continue;
+      }
       const outcome = await forwardPushPlusMessage(env, item);
       if (!Object.hasOwn(counts, outcome)) throw new Error(`Unexpected forwarding outcome: ${outcome}`);
       counts[outcome] += 1;
