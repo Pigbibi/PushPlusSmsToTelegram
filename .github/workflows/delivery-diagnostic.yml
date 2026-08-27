@@ -1,0 +1,93 @@
+name: Diagnose PushPlus delivery
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: pushplus-delivery-diagnostic
+  cancel-in-progress: false
+
+jobs:
+  diagnose:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      PUSHPLUS_TOKEN: ${{ secrets.PUSHPLUS_TOKEN }}
+      PUSHPLUS_SECRET_KEY: ${{ secrets.PUSHPLUS_SECRET_KEY }}
+      PUSHPLUS_WEBHOOK_URL: https://pushplus-sms-to-telegram.pages.dev/pushplus/webhook/${{ secrets.RELAY_TOKEN }}
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 22
+
+      - name: Inspect recent PushPlus records without message content
+        run: |
+          node <<'NODE'
+          const { fetchRecentMessages } = require('./src/pushplus');
+
+          async function main() {
+            const messages = await fetchRecentMessages({
+              token: process.env.PUSHPLUS_TOKEN,
+              secretKey: process.env.PUSHPLUS_SECRET_KEY,
+              baseUrl: 'https://www.pushplus.plus',
+              pageSize: 20,
+              titleKeyword: '短信转发',
+              bodyKeyword: '',
+              lookbackMinutes: 7 * 24 * 60,
+            });
+            const dayAgo = Date.now() - 24 * 60 * 60 * 1000;
+            const summary = {
+              matchingRecordsSevenDays: messages.length,
+              matchingRecordsTwentyFourHours: messages.filter(message => message.receivedAt >= dayAgo).length,
+              latestUpdateTime: messages.at(-1)?.updateTime || null,
+              readableDetails: messages.filter(message => message.text.length > 0).length,
+              smsMarkerRecords: messages.filter(message => message.text.includes('#SMS')).length,
+              senderFieldRecords: messages.filter(message => /发件(?:号码|人|号)?\s*[:：]/.test(message.text)).length,
+            };
+            console.log(JSON.stringify(summary));
+          }
+
+          main().catch(error => {
+            console.error(error.message);
+            process.exit(1);
+          });
+          NODE
+
+      - name: Send production webhook-to-Telegram smoke message
+        env:
+          TEST_SOURCE_ID: delivery-smoke-${{ github.run_id }}-${{ github.run_attempt }}
+        run: |
+          node <<'NODE'
+          async function main() {
+            const response = await fetch(process.env.PUSHPLUS_WEBHOOK_URL, {
+              method: 'POST',
+              headers: { 'content-type': 'application/json' },
+              body: JSON.stringify({
+                shortCode: process.env.TEST_SOURCE_ID,
+                title: '短信转发',
+                content: [
+                  'PushPlus 到 Telegram 生产链路诊断消息',
+                  '发件号码: DIAGNOSTIC',
+                  `发件时间: ${new Date().toISOString()}`,
+                  '#SMS',
+                ].join('\n'),
+              }),
+            });
+            const body = await response.text();
+            if (!response.ok) throw new Error(`Production webhook smoke failed: HTTP ${response.status}`);
+            const data = JSON.parse(body);
+            if (data.code !== 200) throw new Error('Production webhook smoke returned a non-success response');
+            console.log('Production webhook accepted the message and Telegram sendMessage succeeded.');
+          }
+
+          main().catch(error => {
+            console.error(error.message);
+            process.exit(1);
+          });
+          NODE
