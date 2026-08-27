@@ -895,6 +895,24 @@ async function processMessages(request, env, url) {
   return jsonResponse({ messages: messages.slice(0, limit) });
 }
 
+async function processHandledDiagnostic(request, env) {
+  requireEnv(env, 'STATE_SECRET');
+  if (!env.FORWARDED_KV) throw new Error('Missing KV binding: FORWARDED_KV');
+  if (!authorizeInterceptLeaseRequest(request, env)) {
+    return jsonResponse({ code: 401, msg: 'unauthorized' }, 401);
+  }
+  if (request.method !== 'POST') {
+    return jsonResponse({ code: 405, msg: 'method not allowed' }, 405);
+  }
+  const body = await request.json().catch(() => ({}));
+  const sourceId = body?.sourceId;
+  if (typeof sourceId !== 'string' || !sourceId || sourceId.length > 256) {
+    return jsonResponse({ code: 400, msg: 'invalid sourceId' }, 400);
+  }
+  const handled = Boolean(await env.FORWARDED_KV.get(await dedupeKey(sourceId, env)));
+  return jsonResponse({ code: 200, handled });
+}
+
 async function forwardPushPlusMessage(env, message) {
   requireEnv(env, 'STATE_SECRET');
   if (!env.FORWARDED_KV) throw new Error('Missing KV binding: FORWARDED_KV');
@@ -1076,6 +1094,14 @@ export default {
     if (url.pathname === '/messages' || url.pathname === '/pushplus/messages') {
       try {
         return await processMessages(request, env, url);
+      } catch (err) {
+        console.error(err.message);
+        return jsonResponse({ code: 500, msg: 'internal error' }, 500);
+      }
+    }
+    if (url.pathname === '/diagnostics/handled') {
+      try {
+        return await processHandledDiagnostic(request, env);
       } catch (err) {
         console.error(err.message);
         return jsonResponse({ code: 500, msg: 'internal error' }, 500);

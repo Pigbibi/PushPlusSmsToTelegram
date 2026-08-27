@@ -60,9 +60,15 @@ jobs:
           NODE
 
       - name: Send end-to-end message through PushPlus
+        id: pushplus_ingress
         run: |
           node <<'NODE'
+          const fs = require('node:fs');
           const sleep = milliseconds => new Promise(resolve => setTimeout(resolve, milliseconds));
+
+          function setOutput(name, value) {
+            fs.appendFileSync(process.env.GITHUB_OUTPUT, `${name}=${value}\n`);
+          }
 
           async function requestJson(url, options = {}) {
             const response = await fetch(url, {
@@ -114,6 +120,7 @@ jobs:
               }
               const status = Number(result?.data?.status);
               if (status === 2) {
+                setOutput('delivery_mode', 'realtime');
                 console.log('PushPlus accepted the message and completed webhook delivery to Telegram.');
                 return;
               }
@@ -122,11 +129,57 @@ jobs:
                   .replace(/\/pushplus\/webhook\/[^/?\s]+/gi, '/pushplus/webhook/[redacted]')
                   .replace(/([?&](?:token|key|secret|authorization)=)[^&\s]+/gi, '$1[redacted]')
                   .slice(0, 500);
-                throw new Error(`PushPlus reported failed webhook delivery: ${detail}`);
+                setOutput('delivery_mode', 'recovery');
+                fs.writeFileSync('.pushplus-diagnostic-source-id', submitted.data, { mode: 0o600 });
+                console.warn(`PushPlus realtime webhook failed; waiting for minute recovery: ${detail}`);
+                return;
               }
               if (attempt < 20) await sleep(2_000);
             }
             throw new Error('Timed out waiting for PushPlus webhook delivery');
+          }
+
+          main().catch(error => {
+            console.error(error.message);
+            process.exit(1);
+          });
+          NODE
+
+      - name: Verify minute recovery after PushPlus webhook failure
+        if: steps.pushplus_ingress.outputs.delivery_mode == 'recovery'
+        timeout-minutes: 3
+        env:
+          INBOX_TOKEN: ${{ secrets.INBOX_TOKEN }}
+        run: |
+          node <<'NODE'
+          const fs = require('node:fs');
+          const sleep = milliseconds => new Promise(resolve => setTimeout(resolve, milliseconds));
+
+          async function main() {
+            const sourceId = fs.readFileSync('.pushplus-diagnostic-source-id', 'utf8').trim();
+            if (!sourceId || !process.env.INBOX_TOKEN) throw new Error('Missing recovery diagnostic credentials');
+            for (let attempt = 1; attempt <= 12; attempt += 1) {
+              const response = await fetch(
+                'https://pushplus-sms-to-telegram.pigbibi.workers.dev/diagnostics/handled',
+                {
+                  method: 'POST',
+                  headers: {
+                    authorization: `Bearer ${process.env.INBOX_TOKEN}`,
+                    'content-type': 'application/json',
+                  },
+                  body: JSON.stringify({ sourceId }),
+                  signal: AbortSignal.timeout(15_000),
+                },
+              );
+              const data = await response.json().catch(() => ({}));
+              if (!response.ok) throw new Error(`Recovery diagnostic HTTP ${response.status}`);
+              if (data.handled === true) {
+                console.log('Minute recovery processed the failed PushPlus webhook message.');
+                return;
+              }
+              if (attempt < 12) await sleep(10_000);
+            }
+            throw new Error('Minute recovery did not process the failed PushPlus webhook message in time');
           }
 
           main().catch(error => {
