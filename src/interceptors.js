@@ -91,6 +91,24 @@ function telecomClaimPresetRules(env = {}) {
   ];
 }
 
+function guangdongSsoPresetRules(env = {}) {
+  const rule = {
+    name: 'guangdong-sso-auth',
+    action: 'silence-store',
+    textIncludesAll: ['验证码'],
+    textIncludesAny: ['统一身份认证', '广东政务服务', '粤省事', '政务服务网'],
+  };
+  if (env.GUANGDONG_SMS_SENDER) rule.senderIncludes = env.GUANGDONG_SMS_SENDER;
+  if (env.GUANGDONG_SMS_KEYWORD) rule.textIncludesAny = [env.GUANGDONG_SMS_KEYWORD];
+  return [rule];
+}
+
+function interceptPresetRules(preset, env) {
+  if (preset === 'telecom-claim-silent') return telecomClaimPresetRules(env);
+  if (preset === 'guangdong-sso-auth') return guangdongSsoPresetRules(env);
+  return [];
+}
+
 function parseCustomRules(value) {
   if (!value) return [];
   const parsed = JSON.parse(value);
@@ -105,9 +123,7 @@ function loadInterceptRules(env = process.env) {
 
   const rules = [];
   for (const preset of presets) {
-    if (preset === 'telecom-claim-silent') {
-      rules.push(...telecomClaimPresetRules(env));
-    }
+    rules.push(...interceptPresetRules(preset, env));
   }
   rules.push(...parseCustomRules(env.SMS_INTERCEPT_RULES));
   return rules;
@@ -132,6 +148,7 @@ function interceptShouldSilence(rule) {
 module.exports = {
   compactText,
   findInterceptRule,
+  guangdongSsoPresetRules,
   interceptAction,
   interceptShouldSilence,
   interceptShouldStore,

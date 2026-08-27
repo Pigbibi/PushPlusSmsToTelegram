@@ -129,6 +129,27 @@ jobs:
           fi
           npx wrangler deploy
 
+          if [ -n "${INBOX_TOKEN:-}" ]; then
+            lease_id="deploy-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+            lease_url="https://pushplus-sms-to-telegram.pigbibi.workers.dev/intercepts/leases/telecom-claim-silent/${lease_id}"
+            release_lease() {
+              curl -fsS --connect-timeout 8 --max-time 20 \
+                -X DELETE \
+                -H "Authorization: Bearer $INBOX_TOKEN" \
+                "$lease_url" >/dev/null || true
+            }
+            trap release_lease EXIT
+            curl -fsS --connect-timeout 8 --max-time 20 \
+              -X PUT \
+              -H "Authorization: Bearer $INBOX_TOKEN" \
+              -H 'Content-Type: application/json' \
+              --data '{"ttlSeconds":60}' \
+              "$lease_url" >/dev/null
+            release_lease
+            trap - EXIT
+            echo "Intercept lease smoke test passed."
+          fi
+
       - name: Deploy Pages relay
         run: |
           set -euo pipefail

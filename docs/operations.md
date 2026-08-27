@@ -143,6 +143,13 @@ When delivery fails, check in this order:
 A healthy relay only proves the relay process is reachable. It does not verify
 the Worker origin, PushPlus credentials, Telegram delivery, or KV access.
 
+Workflow consumers that need to hide OTP notifications temporarily should
+acquire an intercept lease immediately before the SMS-producing step and
+release it with an `always()` cleanup step. Use a unique lease ID derived from
+the workflow run ID and attempt. Do not leave the equivalent preset in
+`SMS_INTERCEPT_PRESETS` or `SMS_INTERCEPT_RULES`, because static rules continue
+silencing messages after the consumer workflow finishes.
+
 ## Data handling
 
 Normal forwarding stores salted deduplication keys rather than SMS bodies.
