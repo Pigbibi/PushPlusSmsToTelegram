@@ -18,7 +18,7 @@ jobs:
       PUSHPLUS_TOKEN: ${{ secrets.PUSHPLUS_TOKEN }}
       PUSHPLUS_SECRET_KEY: ${{ secrets.PUSHPLUS_SECRET_KEY }}
       RELAY_TOKEN: ${{ secrets.RELAY_TOKEN }}
-      PUSHPLUS_WEBHOOK_URL: https://pushplus-sms-to-telegram.pages.dev/pushplus/webhook/${{ secrets.RELAY_TOKEN }}
+      PUSHPLUS_WEBHOOK_BASE_URL: ${{ vars.PUSHPLUS_WEBHOOK_BASE_URL || 'https://pushplus-sms-to-telegram.pages.dev/pushplus/webhook' }}
       PUSHPLUS_VPS_RELAY_BASE_URL: ${{ vars.PUSHPLUS_VPS_RELAY_BASE_URL || '' }}
 
     steps:
@@ -297,14 +297,18 @@ jobs:
           });
           NODE
 
-      - name: Send production webhook-to-Telegram smoke message
+      - name: Send active relay-to-Telegram smoke message
         if: always()
         env:
           TEST_SOURCE_ID: delivery-smoke-${{ github.run_id }}-${{ github.run_attempt }}
         run: |
           node <<'NODE'
           async function main() {
-            const response = await fetch(process.env.PUSHPLUS_WEBHOOK_URL, {
+            if (!process.env.PUSHPLUS_WEBHOOK_BASE_URL || !process.env.RELAY_TOKEN) {
+              throw new Error('Missing active relay diagnostic configuration');
+            }
+            const webhookUrl = `${process.env.PUSHPLUS_WEBHOOK_BASE_URL.replace(/\/$/, '')}/${process.env.RELAY_TOKEN}`;
+            const response = await fetch(webhookUrl, {
               method: 'POST',
               headers: { 'content-type': 'application/json' },
               body: JSON.stringify({
@@ -319,10 +323,10 @@ jobs:
               }),
             });
             const body = await response.text();
-            if (!response.ok) throw new Error(`Production webhook smoke failed: HTTP ${response.status}`);
+            if (!response.ok) throw new Error(`Active relay smoke failed: HTTP ${response.status}`);
             const data = JSON.parse(body);
-            if (data.code !== 200) throw new Error('Production webhook smoke returned a non-success response');
-            console.log('Production webhook accepted the message and Telegram sendMessage succeeded.');
+            if (data.code !== 200) throw new Error('Active relay smoke returned a non-success response');
+            console.log('Active relay accepted the message and Telegram sendMessage succeeded.');
           }
 
           main().catch(error => {

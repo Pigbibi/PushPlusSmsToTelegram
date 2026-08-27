@@ -26,6 +26,7 @@ jobs:
       PUSHPLUS_TOKEN: ${{ secrets.PUSHPLUS_TOKEN }}
       PUSHPLUS_SECRET_KEY: ${{ secrets.PUSHPLUS_SECRET_KEY }}
       PUSHPLUS_WEBHOOK_URL: https://pushplus-sms-to-telegram.pages.dev/pushplus/webhook/${{ secrets.RELAY_TOKEN }}
+      PUSHPLUS_WEBHOOK_BASE_URL: ${{ vars.PUSHPLUS_WEBHOOK_BASE_URL || '' }}
       PUSHPLUS_SET_USER_DEFAULT: ${{ vars.PUSHPLUS_SET_USER_DEFAULT || 'true' }}
       SMS_INTERCEPT_PRESETS: ${{ vars.SMS_INTERCEPT_PRESETS || '' }}
       SMS_INTERCEPT_RULES: ${{ vars.SMS_INTERCEPT_RULES || '' }}
@@ -160,4 +161,13 @@ jobs:
           npx wrangler pages deploy dist --project-name pushplus-sms-to-telegram --branch main --commit-dirty=true
 
       - name: Configure PushPlus webhook
-        run: npm run configure:pushplus
+        run: |
+          set -euo pipefail
+          if [ -n "${PUSHPLUS_WEBHOOK_BASE_URL:-}" ]; then
+            case "$PUSHPLUS_WEBHOOK_BASE_URL" in
+              https://*) ;;
+              *) echo "PUSHPLUS_WEBHOOK_BASE_URL must use HTTPS" >&2; exit 1 ;;
+            esac
+            export PUSHPLUS_WEBHOOK_URL="${PUSHPLUS_WEBHOOK_BASE_URL%/}/${RELAY_TOKEN}"
+          fi
+          npm run configure:pushplus
