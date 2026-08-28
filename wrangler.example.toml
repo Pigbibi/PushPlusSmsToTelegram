@@ -13,10 +13,11 @@ MESSAGE_TITLE_KEYWORD = "短信转发"
 # TELEGRAM_RETRY_DELAY_MS = "500"
 # TELEGRAM_TIMEOUT_MS = "8000"
 
-# Optional best-effort hourly recovery for failed realtime webhook deliveries
-# that remain visible in the PushPlus Open API message list.
+# Optional best-effort scheduled recovery for realtime deliveries that remain
+# visible in the PushPlus Open API message list but are locally unhandled.
 # Recovery is disabled unless explicitly enabled and given an activation baseline.
 # PUSHPLUS_RECOVERY_ENABLED = "false"
+# PUSHPLUS_RECOVERY_MODE = "failed-only"
 # PUSHPLUS_RECOVERY_NOT_BEFORE = "2026-08-22T00:00:00Z"
 # PUSHPLUS_RECOVERY_LOOKBACK_HOURS = "48"
 # PUSHPLUS_RECOVERY_MIN_AGE_MINUTES = "10"
@@ -41,7 +42,7 @@ MESSAGE_TITLE_KEYWORD = "短信转发"
 # SMS_INTERCEPT_RULES = '[{"name":"bank-otp","action":"silence","senderIncludes":"95588","textIncludesAll":["验证码"]}]'
 
 [triggers]
-crons = ["31 * * * *", "17 3 * * *"]
+crons = ["3,13,23,33,43,53 * * * *", "17 3 * * *"]
 
 [[kv_namespaces]]
 binding = "FORWARDED_KV"

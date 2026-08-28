@@ -212,10 +212,11 @@ npm run configure:pushplus
 6. 整理短信元数据并发送到 Telegram；
 7. 写入带 TTL 的去重标记。
 
-可选的尽力而为式每小时补偿会复用相同的过滤、拦截和 KV 状态。它会检查 PushPlus 的
-最终投递状态，并补偿仍能出现在开放接口列表中的失败消息。PushPlus 可能不在列表中
-保留连接超时消息，因此该功能不能替代稳定可达的中继。只有操作员设置启用时间并明确
-开启后，该功能才会运行。详细配置见
+可选的尽力而为式定时补偿会复用相同的过滤、拦截和 KV 状态。`unhandled` 模式只认
+Worker 本地是否已有处理标记：即使 PushPlus 自报投递成功，只要历史记录仍可见且本地
+未处理，就会补转。设备根本没有送达 PushPlus 的短信不会出现在历史列表中，因此该功能
+不能替代 SIM 网关到 PushPlus 的网络连接。只有操作员设置启用时间并明确开启后，该功能
+才会运行。详细配置见
 [配置说明](docs/configuration.md#missed-message-recovery)。
 
 配置 `INBOX_TOKEN` 后才能访问受保护 inbox：

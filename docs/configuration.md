@@ -205,22 +205,28 @@ token in query strings, logs, or repository variables.
 
 ## Missed-message recovery
 
-The Worker can poll the PushPlus Open API once an hour for recent messages. It
-queries each candidate's final PushPlus delivery status and recovers only
-messages whose realtime webhook is explicitly marked failed. PushPlus may omit
-connection-timeout failures from the message list, so this is a best-effort
-backfill rather than a substitute for a reachable webhook relay. Recovered
-messages use the normal filters, intercept rules, Telegram delivery, and KV
-deduplication path.
+The Worker can poll the PushPlus Open API every ten minutes for recent
+messages. In the default `failed-only` mode it queries each candidate's final
+PushPlus delivery status and recovers only messages explicitly marked failed.
+The `unhandled` mode instead treats the Worker's KV marker as authoritative: a
+matching history record that is old enough and has no local handled marker is
+processed even when PushPlus reports the channel as delivered. This covers a
+lost callback or a failure after PushPlus accepted the delivery.
+
+PushPlus may omit messages that never reached its service, so recovery remains
+a best-effort backfill rather than a substitute for connectivity between the
+SIM gateway and PushPlus. Recovered messages use the normal filters,
+time-bounded intercept leases, Telegram delivery, and KV deduplication path.
 
 Recovery is off by default and fails closed without an activation timestamp:
 
 | Variable | Default | Purpose |
 | --- | --- | --- |
-| `PUSHPLUS_RECOVERY_ENABLED` | `false` | Enable the best-effort hourly recovery job |
+| `PUSHPLUS_RECOVERY_ENABLED` | `false` | Enable the best-effort recovery job |
+| `PUSHPLUS_RECOVERY_MODE` | `failed-only` | `failed-only` trusts upstream status; `unhandled` recovers any locally unhandled match |
 | `PUSHPLUS_RECOVERY_NOT_BEFORE` | required when enabled | ISO-8601 timestamp; never consider an older record |
 | `PUSHPLUS_RECOVERY_LOOKBACK_HOURS` | `48` | Maximum age of records considered; maximum 720 hours |
-| `PUSHPLUS_RECOVERY_MIN_AGE_MINUTES` | `10` | Minimum message age before checking final delivery status |
+| `PUSHPLUS_RECOVERY_MIN_AGE_MINUTES` | `10` | Minimum message age before considering a record, which avoids racing realtime delivery |
 | `PUSHPLUS_RECOVERY_PAGE_SIZE` | `50` | Records read per page; maximum 50 |
 | `PUSHPLUS_RECOVERY_MAX_PAGES` | `2` | Maximum pages scanned per run; maximum 20 |
 | `PUSHPLUS_RECOVERY_MAX_MESSAGES` | `20` | Maximum candidates processed per run; maximum 50 |
@@ -232,12 +238,13 @@ delivery secrets before enabling recovery. Use a current timestamp with an
 explicit timezone for `PUSHPLUS_RECOVERY_NOT_BEFORE`; this prevents the first
 run from replaying older account history.
 
-The default trigger runs at minute 31 each hour. Status `0`/`1` messages remain
-pending, status `2` messages are left to the realtime path, and only status `3`
-messages are recovered. The Worker rechecks KV immediately before processing
-each failed candidate. Access keys are cached in memory until shortly before
-expiry and are refreshed once when an Open API call fails, keeping the polling
-loop bounded.
+The default trigger runs at minutes 3, 13, 23, 33, 43, and 53. In
+`failed-only` mode, status `0`/`1` messages remain pending, status `2` messages
+are left to the realtime path, and only status `3` messages are recovered. In
+`unhandled` mode, upstream status is not queried; the Worker rechecks KV in the
+normal forwarding pipeline before delivery. Access keys are cached in memory
+until shortly before expiry and are refreshed once when an Open API call
+fails, keeping the polling loop bounded.
 
 With alerts enabled, only a run that actually forwards at least one message
 sends a Telegram summary. Set `PUSHPLUS_RECOVERY_ALERT_ENABLED=false` to keep
