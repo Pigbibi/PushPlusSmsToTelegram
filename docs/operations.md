@@ -127,7 +127,7 @@ npm run forward
 
 Review output before setting `DRY_RUN=false`.
 
-## Best-effort hourly recovery
+## Best-effort scheduled recovery
 
 Keep realtime webhook delivery as the primary path. Enable recovery only after
 the Worker has valid PushPlus, Telegram, state, and KV configuration.
@@ -137,8 +137,11 @@ the Worker has valid PushPlus, Telegram, state, and KV configuration.
    timezone.
 3. Set a narrow `PUSHPLUS_RECOVERY_TITLE_KEYWORD` when the PushPlus account
    contains unrelated messages.
-4. Set `PUSHPLUS_RECOVERY_ENABLED=true` and deploy again.
-5. Check Worker logs for the `pushplus_recovery` event after the next hourly
+4. Keep `PUSHPLUS_RECOVERY_MODE=failed-only` for conservative recovery, or set
+   it to `unhandled` when local KV state should be authoritative even if
+   PushPlus reports delivery success.
+5. Set `PUSHPLUS_RECOVERY_ENABLED=true` and deploy again.
+6. Check Worker logs for the `pushplus_recovery` event after the next scheduled
    trigger.
 
 The log reports scanned candidates and separate forwarded, intercepted,

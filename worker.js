@@ -11,7 +11,7 @@ const DEFAULT_RECOVERY_MIN_AGE_MINUTES = 10;
 const DEFAULT_RECOVERY_PAGE_SIZE = 50;
 const DEFAULT_RECOVERY_MAX_PAGES = 2;
 const DEFAULT_RECOVERY_MAX_MESSAGES = 20;
-const RECOVERY_CRON = '31 * * * *';
+const RECOVERY_CRON = '3,13,23,33,43,53 * * * *';
 const CLEANUP_CRON = '17 3 * * *';
 const PUSHPLUS_ACCESS_KEY_REFRESH_MARGIN_SECONDS = 5 * 60;
 const INTERCEPT_LEASE_STORAGE_PREFIX = 'lease:';
@@ -706,6 +706,11 @@ async function recoverPushPlusMessages(env) {
     };
   }
 
+  const recoveryMode = String(env.PUSHPLUS_RECOVERY_MODE || 'failed-only').trim().toLowerCase();
+  if (!['failed-only', 'unhandled'].includes(recoveryMode)) {
+    throw new Error(`Invalid PUSHPLUS_RECOVERY_MODE: ${recoveryMode}`);
+  }
+
   const lookbackHours = numberEnv(
     env,
     'PUSHPLUS_RECOVERY_LOOKBACK_HOURS',
@@ -783,17 +788,19 @@ async function recoverPushPlusMessages(env) {
   };
   for (const item of candidates.slice(0, maxMessages)) {
     try {
-      const delivery = await withPushPlusAccessKey(
-        env,
-        accessKey => getPushPlusMessageResult(env, accessKey, item.shortCode),
-      );
-      if (delivery.status === 2) {
-        counts.upstreamDelivered += 1;
-        continue;
-      }
-      if (delivery.status !== 3) {
-        counts.upstreamPending += 1;
-        continue;
+      if (recoveryMode === 'failed-only') {
+        const delivery = await withPushPlusAccessKey(
+          env,
+          accessKey => getPushPlusMessageResult(env, accessKey, item.shortCode),
+        );
+        if (delivery.status === 2) {
+          counts.upstreamDelivered += 1;
+          continue;
+        }
+        if (delivery.status !== 3) {
+          counts.upstreamPending += 1;
+          continue;
+        }
       }
       const outcome = await forwardPushPlusMessage(env, item);
       if (!Object.hasOwn(counts, outcome)) throw new Error(`Unexpected forwarding outcome: ${outcome}`);
@@ -825,6 +832,7 @@ async function recoverPushPlusMessages(env) {
 
   return {
     enabled: true,
+    mode: recoveryMode,
     scanned,
     candidates: candidates.length,
     processed,

@@ -205,12 +205,14 @@ Messages pass through these stages:
 6. normalize SMS metadata and send the result to Telegram;
 7. store a deduplication marker with a bounded TTL.
 
-Optional best-effort hourly recovery uses the same filters, intercept rules,
-and KV state. It checks PushPlus delivery status and can recover failed messages
-that remain visible in the Open API list. PushPlus may omit connection-timeout
-failures from that list, so recovery is not a substitute for a reachable relay.
-It is disabled until an operator sets an activation timestamp and enables it
-explicitly. See [Configuration](docs/configuration.md#missed-message-recovery).
+Optional best-effort scheduled recovery uses the same filters, intercept
+rules, and KV state. Its `unhandled` mode can recover a matching PushPlus
+history record whenever the Worker has no local handled marker, even if
+PushPlus reports that its channel delivery succeeded. PushPlus may omit
+messages that never reached its service, so recovery is not a substitute for
+connectivity from the SIM gateway. It is disabled until an operator sets an
+activation timestamp and enables it explicitly. See
+[Configuration](docs/configuration.md#missed-message-recovery).
 
 The protected inbox is available only when `INBOX_TOKEN` is configured:
 

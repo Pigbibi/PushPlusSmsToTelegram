@@ -25,7 +25,7 @@ async function runScheduled(worker, event, env) {
   await Promise.all(pending);
 }
 
-test('hourly recovery forwards the oldest visible failed webhook delivery within its cap', async () => {
+test('scheduled recovery forwards the oldest visible failed webhook delivery within its cap', async () => {
   const { default: worker } = await loadWorker();
   const originalFetch = globalThis.fetch;
   const originalCrypto = Object.getOwnPropertyDescriptor(globalThis, 'crypto');
@@ -78,7 +78,7 @@ test('hourly recovery forwards the oldest visible failed webhook delivery within
   };
 
   try {
-    await runScheduled(worker, { cron: '31 * * * *' }, {
+    await runScheduled(worker, { cron: '3,13,23,33,43,53 * * * *' }, {
       PUSHPLUS_RECOVERY_ENABLED: 'true',
       PUSHPLUS_RECOVERY_NOT_BEFORE: '2026-06-06T10:00:00.000Z',
       PUSHPLUS_RECOVERY_MIN_AGE_MINUTES: '0',
@@ -112,7 +112,7 @@ test('hourly recovery forwards the oldest visible failed webhook delivery within
   assert.equal(accessKeyCalls, 1);
 });
 
-test('hourly recovery is fail-closed without an activation baseline', async () => {
+test('scheduled recovery is fail-closed without an activation baseline', async () => {
   const { default: worker } = await loadWorker();
   const originalFetch = globalThis.fetch;
   let fetched = false;
@@ -122,7 +122,7 @@ test('hourly recovery is fail-closed without an activation baseline', async () =
   };
 
   try {
-    await runScheduled(worker, { cron: '31 * * * *' }, {
+    await runScheduled(worker, { cron: '3,13,23,33,43,53 * * * *' }, {
       PUSHPLUS_RECOVERY_ENABLED: 'true',
     });
   } finally {
@@ -132,7 +132,7 @@ test('hourly recovery is fail-closed without an activation baseline', async () =
   assert.equal(fetched, false);
 });
 
-test('hourly recovery refreshes a cached PushPlus access key once after rejection', async () => {
+test('scheduled recovery refreshes a cached PushPlus access key once after rejection', async () => {
   const { default: worker } = await loadWorker();
   const originalFetch = globalThis.fetch;
   let accessKeyCalls = 0;
@@ -165,8 +165,8 @@ test('hourly recovery refreshes a cached PushPlus access key once after rejectio
     FORWARDED_KV: { get: async () => null, put: async () => {} },
   };
   try {
-    await runScheduled(worker, { cron: '31 * * * *' }, env);
-    await runScheduled(worker, { cron: '31 * * * *' }, env);
+    await runScheduled(worker, { cron: '3,13,23,33,43,53 * * * *' }, env);
+    await runScheduled(worker, { cron: '3,13,23,33,43,53 * * * *' }, env);
   } finally {
     globalThis.fetch = originalFetch;
   }
@@ -175,7 +175,7 @@ test('hourly recovery refreshes a cached PushPlus access key once after rejectio
   assert.equal(listCalls, 3);
 });
 
-test('hourly recovery skips messages PushPlus reports as delivered', async () => {
+test('failed-only recovery skips messages PushPlus reports as delivered', async () => {
   const { default: worker } = await loadWorker();
   const originalFetch = globalThis.fetch;
   const originalCrypto = Object.getOwnPropertyDescriptor(globalThis, 'crypto');
@@ -212,7 +212,7 @@ test('hourly recovery skips messages PushPlus reports as delivered', async () =>
   };
 
   try {
-    await runScheduled(worker, { cron: '31 * * * *' }, {
+    await runScheduled(worker, { cron: '3,13,23,33,43,53 * * * *' }, {
       PUSHPLUS_RECOVERY_ENABLED: 'true',
       PUSHPLUS_RECOVERY_NOT_BEFORE: '2026-06-06T10:00:00.000Z',
       PUSHPLUS_TOKEN: 'token',
@@ -243,17 +243,98 @@ test('hourly recovery skips messages PushPlus reports as delivered', async () =>
   assert.equal(deliveryCalls, 0);
 });
 
-test('hourly recovery trigger never runs record cleanup', async () => {
+test('unhandled recovery forwards a locally missing message without trusting delivered status', async () => {
+  const { default: worker } = await loadWorker();
+  const originalFetch = globalThis.fetch;
+  const originalCrypto = Object.getOwnPropertyDescriptor(globalThis, 'crypto');
+  const originalNow = Date.now;
+  const stateSecret = 'test-state-secret';
+  const recoveredKey = await workerDedupeKey(stateSecret, 'delivered-but-unhandled');
+  const stored = new Map();
+  let statusQueries = 0;
+  let telegramCalls = 0;
+
+  Date.now = () => Date.UTC(2026, 5, 6, 12, 0, 0);
+  Object.defineProperty(globalThis, 'crypto', { value: webcrypto, configurable: true });
+  globalThis.fetch = async (url) => {
+    const parsed = new URL(String(url));
+    if (parsed.pathname === '/api/common/openApi/getAccessKey') {
+      return Response.json({ code: 200, msg: 'ok', data: { accessKey: 'access-key' } });
+    }
+    if (parsed.pathname === '/api/open/message/list') {
+      return Response.json({
+        code: 200,
+        msg: 'ok',
+        data: {
+          pages: 1,
+          list: [
+            {
+              shortCode: 'delivered-but-unhandled',
+              title: '短信转发',
+              updateTime: '2026-06-06 19:30:00',
+            },
+          ],
+        },
+      });
+    }
+    if (parsed.pathname === '/api/open/message/sendMessageResult') {
+      statusQueries += 1;
+      return Response.json({ code: 200, msg: 'ok', data: { status: 2, errorMessage: '' } });
+    }
+    if (parsed.pathname === '/shortMessage/delivered-but-unhandled') {
+      return new Response('#SMS\n发件号码: 10086\n发件时间: 2026-06-06 19:30:00\n本地未处理补漏');
+    }
+    if (parsed.hostname === 'api.telegram.org') {
+      telegramCalls += 1;
+      return Response.json({ ok: true });
+    }
+    throw new Error(`unexpected fetch ${parsed.pathname}`);
+  };
+
+  try {
+    await runScheduled(worker, { cron: '3,13,23,33,43,53 * * * *' }, {
+      PUSHPLUS_RECOVERY_ENABLED: 'true',
+      PUSHPLUS_RECOVERY_MODE: 'unhandled',
+      PUSHPLUS_RECOVERY_ALERT_ENABLED: 'false',
+      PUSHPLUS_RECOVERY_NOT_BEFORE: '2026-06-06T10:00:00.000Z',
+      PUSHPLUS_RECOVERY_TITLE_KEYWORD: '短信转发',
+      MESSAGE_BODY_KEYWORD: '#SMS',
+      PUSHPLUS_TOKEN: 'token',
+      PUSHPLUS_SECRET_KEY: 'secret-key',
+      STATE_SECRET: stateSecret,
+      TELEGRAM_BOT_TOKEN: 'telegram-token',
+      TELEGRAM_CHAT_ID: 'chat-id',
+      FORWARDED_KV: {
+        get: async key => stored.get(key) || null,
+        put: async (key, value) => stored.set(key, value),
+      },
+    });
+  } finally {
+    globalThis.fetch = originalFetch;
+    if (originalCrypto) {
+      Object.defineProperty(globalThis, 'crypto', originalCrypto);
+    } else {
+      delete globalThis.crypto;
+    }
+    Date.now = originalNow;
+  }
+
+  assert.equal(statusQueries, 0);
+  assert.equal(telegramCalls, 1);
+  assert.equal(stored.has(recoveredKey), true);
+});
+
+test('recovery trigger never runs record cleanup', async () => {
   const { default: worker } = await loadWorker();
   const originalFetch = globalThis.fetch;
   let fetched = false;
   globalThis.fetch = async () => {
     fetched = true;
-    throw new Error('hourly recovery trigger must not run cleanup');
+    throw new Error('recovery trigger must not run cleanup');
   };
 
   try {
-    await runScheduled(worker, { cron: '31 * * * *' }, {
+    await runScheduled(worker, { cron: '3,13,23,33,43,53 * * * *' }, {
       PUSHPLUS_CLEANUP_ENABLED: 'true',
     });
   } finally {
@@ -304,7 +385,7 @@ test('recovery summary can be disabled without disabling delivery', async () => 
 
   try {
     const stored = new Map();
-    await runScheduled(worker, { cron: '31 * * * *' }, {
+    await runScheduled(worker, { cron: '3,13,23,33,43,53 * * * *' }, {
       PUSHPLUS_RECOVERY_ENABLED: 'true',
       PUSHPLUS_RECOVERY_ALERT_ENABLED: 'false',
       PUSHPLUS_RECOVERY_NOT_BEFORE: '2026-06-06T10:00:00.000Z',
@@ -336,6 +417,7 @@ test('deployment exposes recovery without a maintainer-specific endpoint', () =>
   const wrangler = fs.readFileSync(path.join(__dirname, '..', 'wrangler.example.toml'), 'utf8');
   const settings = [
     'PUSHPLUS_RECOVERY_ENABLED',
+    'PUSHPLUS_RECOVERY_MODE',
     'PUSHPLUS_RECOVERY_NOT_BEFORE',
     'PUSHPLUS_RECOVERY_LOOKBACK_HOURS',
     'PUSHPLUS_RECOVERY_MIN_AGE_MINUTES',
@@ -350,7 +432,7 @@ test('deployment exposes recovery without a maintainer-specific endpoint', () =>
     assert.match(workflow, new RegExp(setting));
     assert.match(wrangler, new RegExp(setting));
   }
-  assert.match(wrangler, /"31 \* \* \* \*"/);
+  assert.match(wrangler, /"3,13,23,33,43,53 \* \* \* \*"/);
   assert.match(wrangler, /"17 3 \* \* \*"/);
   assert.doesNotMatch(workflow, /sslip\.io|43\.156\.238\.238/);
   assert.doesNotMatch(wrangler, /sslip\.io|43\.156\.238\.238/);
