@@ -4,11 +4,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { webcrypto } = require('node:crypto');
 
-async function loadWorker() {
-  const source = fs.readFileSync(path.join(__dirname, '..', 'worker.js'), 'utf8');
-  const encoded = Buffer.from(source).toString('base64');
-  return import(`data:text/javascript;base64,${encoded}#${Date.now()}-${Math.random()}`);
-}
+const { loadWorker } = require('../test-support/worker');
 
 async function workerDedupeKey(secret, sourceId) {
   const input = new TextEncoder().encode(`${secret}:${sourceId}`);

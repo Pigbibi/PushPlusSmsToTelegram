@@ -187,6 +187,29 @@ silencing messages after the consumer workflow finishes.
 
 ## Data handling
 
+Forwarding now requires the existing `INTERCEPT_LEASES` Durable Object binding
+and its SQLite-backed `InterceptLeaseCoordinator` class. No additional binding
+or migration is introduced: delivery uses a separate object named
+`sms-delivery`. A KV-only deployment fails closed instead of sending without
+a durable claim. Deploying/configuring this prerequisite requires separate
+operator authorization.
+
+The coordinator transactionally claims all salted message/fingerprint keys
+before sending. It stores only state, confirmed chunk counts, and completion
+expiry metadata, never SMS text, tokens, chat IDs or provider error messages.
+Completed records suppress resending even when the subsequent KV mirror write
+fails. Completed claims have the same 180-day logical deduplication period;
+expired rows are replaced on reuse, not swept by a new automatic cleanup job.
+
+A timeout, malformed response, interrupted object, partial multipart send or
+failed receipt write retains a no-resend reservation. These outcomes require
+manual reconciliation against the Telegram destination before any separately
+authorized reset/replay. Do not clear the object or rotate `STATE_SECRET` as a
+retry workaround. Unknown records do not expire automatically; assess storage
+retention separately without erasing unresolved evidence. This does not promise
+end-to-end exactly-once delivery. Only explicit negative Telegram API responses
+are eligible for the existing bounded retry policy.
+
 Normal forwarding stores salted deduplication keys rather than SMS bodies.
 Rules with storage enabled put selected bodies in KV for six hours. Cloudflare,
 PushPlus, Telegram, and GitHub Actions may still process request or log metadata

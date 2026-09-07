@@ -35,8 +35,68 @@ function jsonResponse(body, status = 200) {
 }
 
 export class InterceptLeaseCoordinator {
-  constructor(ctx) {
+  constructor(ctx, env) {
     this.ctx = ctx;
+    this.env = env;
+    this.deliveryTail = Promise.resolve();
+  }
+
+  async deliver(request) {
+    const { keys, chunks } = await request.json();
+    if (!Array.isArray(keys) || !keys.length || keys.length > 4
+      || !keys.every(key => /^pushplus:[0-9a-f]{64}$/.test(key))
+      || !Array.isArray(chunks) || !chunks.length
+      || !chunks.every(chunk => typeof chunk === 'string' && chunk.length <= 4096)) {
+      return jsonResponse({ state: 'invalid' }, 400);
+    }
+    const storageKeys = [...new Set(keys)].map(key => `delivery:${key}`);
+    const now = Date.now();
+    const initial = { state: 'submitted', confirmedChunks: 0, totalChunks: chunks.length };
+    const claim = await this.ctx.storage.transaction(async txn => {
+      const records = await Promise.all(storageKeys.map(key => txn.get(key)));
+      const unresolved = records.find(record => record && record.state !== 'completed');
+      const completed = records.find(record => record?.state === 'completed' && record.expiresAt > now);
+      const value = unresolved || completed || initial;
+      for (const key of storageKeys) await txn.put(key, value);
+      return unresolved ? 'unknown' : completed ? 'duplicates' : 'claimed';
+    });
+    if (claim === 'unknown') return jsonResponse({ state: 'unknown' }, 409);
+    if (claim === 'duplicates') return jsonResponse({ state: 'duplicates' });
+
+    let confirmedChunks = 0;
+    const persist = async state => {
+      const record = { state, confirmedChunks, totalChunks: chunks.length };
+      if (state === 'completed') record.expiresAt = now + FORWARDED_TTL_SECONDS * 1000;
+      await this.ctx.storage.transaction(async txn => {
+        for (const key of storageKeys) await txn.put(key, record);
+      });
+    };
+    try {
+      // The durable reservation precedes external I/O. Never put fetch inside
+      // a storage transaction: retries of a transaction must not send messages.
+      for (const text of chunks) {
+        await sendTelegram({ env: this.env, text });
+        confirmedChunks += 1;
+        await persist('submitted');
+      }
+      await persist('completed');
+      return jsonResponse({ state: 'forwarded' });
+    } catch (error) {
+      const rejected = error instanceof TelegramDeliveryError && !error.uncertain && confirmedChunks === 0;
+      try {
+        if (rejected) {
+          await this.ctx.storage.transaction(async txn => {
+            await txn.delete(storageKeys);
+          });
+        } else {
+          await persist('unknown');
+        }
+      } catch {
+        // Even if recording the outcome fails, the pre-send reservation stays
+        // durable and blocks another send after this object is reconstructed.
+      }
+      return jsonResponse({ state: rejected ? 'rejected' : 'unknown' }, 503);
+    }
   }
 
   async pruneExpired(now = Date.now()) {
@@ -51,6 +111,14 @@ export class InterceptLeaseCoordinator {
 
   async fetch(request) {
     const url = new URL(request.url);
+    if (request.method === 'POST' && url.pathname === '/deliver') {
+      // In-process ordering is only an optimization; the durable claim above
+      // is the safety boundary across restarts and overlapping aliases.
+      const result = this.deliveryTail.then(() => this.deliver(request))
+        .catch(() => jsonResponse({ state: 'unavailable' }, 503));
+      this.deliveryTail = result.then(() => {});
+      return result;
+    }
     const now = Date.now();
     const leases = await this.pruneExpired(now);
     if (request.method === 'GET' && url.pathname === '/active') {
@@ -316,12 +384,12 @@ function findInterceptRule(message, env) {
   return loadInterceptRules(env).find(rule => messageMatchesRule(message, rule)) || null;
 }
 
-function interceptLeaseCoordinator(env) {
+function interceptLeaseCoordinator(env, name = 'global') {
   if (!env.INTERCEPT_LEASES) throw new Error('Missing Durable Object binding: INTERCEPT_LEASES');
   if (typeof env.INTERCEPT_LEASES.getByName === 'function') {
-    return env.INTERCEPT_LEASES.getByName('global');
+    return env.INTERCEPT_LEASES.getByName(name);
   }
-  const id = env.INTERCEPT_LEASES.idFromName('global');
+  const id = env.INTERCEPT_LEASES.idFromName(name);
   return env.INTERCEPT_LEASES.get(id);
 }
 
@@ -844,12 +912,19 @@ function sleep(milliseconds) {
   return new Promise(resolve => setTimeout(resolve, milliseconds));
 }
 
+class TelegramDeliveryError extends Error {
+  constructor(uncertain) {
+    super(uncertain ? 'Telegram delivery outcome unknown' : 'Telegram delivery rejected');
+    this.uncertain = uncertain;
+  }
+}
+
 async function sendTelegram({ env, text }) {
   const url = `https://api.telegram.org/bot${env.TELEGRAM_BOT_TOKEN}/sendMessage`;
   const attempts = numberEnv(env, 'TELEGRAM_RETRY_ATTEMPTS', DEFAULT_TELEGRAM_RETRY_ATTEMPTS, { min: 1, max: 4 });
   const baseDelayMs = numberEnv(env, 'TELEGRAM_RETRY_DELAY_MS', DEFAULT_TELEGRAM_RETRY_DELAY_MS, { min: 0, max: 5_000 });
   const timeoutMs = numberEnv(env, 'TELEGRAM_TIMEOUT_MS', DEFAULT_TELEGRAM_TIMEOUT_MS, { min: 1_000, max: 10_000 });
-  let lastError = new Error('Telegram sendMessage failed');
+  let lastError = new TelegramDeliveryError(false);
 
   for (let attempt = 1; attempt <= attempts; attempt += 1) {
     let res;
@@ -866,13 +941,18 @@ async function sendTelegram({ env, text }) {
         }),
         signal: AbortSignal.timeout(timeoutMs),
       });
-      data = await res.json().catch(() => ({}));
-      if (res.ok && data.ok !== false) return data?.result || null;
-      lastError = new Error(`Telegram sendMessage failed: ${data.description || res.status}`);
+      data = await res.json();
+      if (res.ok && data.ok === true && Number.isInteger(data.result?.message_id)) return data.result;
+      if (data.ok !== false) throw new TelegramDeliveryError(true);
+      lastError = new TelegramDeliveryError(false);
       const retryable = res.status === 408 || res.status === 429 || res.status >= 500;
       if (!retryable || attempt >= attempts) throw lastError;
     } catch (error) {
-      lastError = error instanceof Error ? error : new Error(String(error));
+      // Network errors and malformed/ambiguous responses are not safe to retry.
+      if (!(error instanceof TelegramDeliveryError) || error.uncertain) {
+        throw new TelegramDeliveryError(true);
+      }
+      lastError = error;
       if (res && res.status !== 408 && res.status !== 429 && res.status < 500) throw lastError;
       if (attempt >= attempts) throw lastError;
     }
@@ -1052,11 +1132,18 @@ async function forwardPushPlusMessage(env, message) {
   requireEnv(env, 'TELEGRAM_BOT_TOKEN');
   requireEnv(env, 'TELEGRAM_CHAT_ID');
   const telegramMessage = { title: message.title || '短信转发', sourceLabel: message.sourceLabel, text };
-  for (const chunk of splitTelegramText(buildTelegramText(telegramMessage))) {
-    await sendTelegram({ env, text: chunk });
+  const response = await interceptLeaseCoordinator(env, 'sms-delivery').fetch(new Request(
+    'https://intercept-leases.internal/deliver', {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ keys, chunks: splitTelegramText(buildTelegramText(telegramMessage)) }),
+    },
+  ));
+  const result = await response.json();
+  if (!response.ok || !['forwarded', 'duplicates'].includes(result.state)) {
+    throw new Error('Telegram delivery not confirmed; durable review may be required');
   }
   await putDedupeKeys(keys, new Date().toISOString(), env);
-  return 'forwarded';
+  return result.state;
 }
 
 function callbackToken(request, url) {

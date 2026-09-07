@@ -4,11 +4,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { webcrypto } = require('node:crypto');
 
-async function loadWorker() {
-  const source = fs.readFileSync(path.join(__dirname, '..', 'worker.js'), 'utf8');
-  const encoded = Buffer.from(source).toString('base64');
-  return import(`data:text/javascript;base64,${encoded}#${Date.now()}-${Math.random()}`);
-}
+const { loadWorker } = require('../test-support/worker');
 
 async function workerDedupeKey(secret, sourceId) {
   const input = new TextEncoder().encode(`${secret}:${sourceId}`);
@@ -72,7 +68,7 @@ test('scheduled recovery forwards the oldest visible failed webhook delivery wit
     }
     if (parsed.hostname === 'api.telegram.org') {
       telegramMessages.push(JSON.parse(options.body).text);
-      return Response.json({ ok: true });
+      return Response.json({ ok: true, result: { message_id: 1 } });
     }
     throw new Error(`unexpected fetch ${parsed.pathname}`);
   };
@@ -286,7 +282,7 @@ test('unhandled recovery forwards a locally missing message without trusting del
     }
     if (parsed.hostname === 'api.telegram.org') {
       telegramCalls += 1;
-      return Response.json({ ok: true });
+      return Response.json({ ok: true, result: { message_id: 1 } });
     }
     throw new Error(`unexpected fetch ${parsed.pathname}`);
   };
@@ -378,7 +374,7 @@ test('recovery summary can be disabled without disabling delivery', async () => 
     }
     if (parsed.hostname === 'api.telegram.org') {
       telegramCalls += 1;
-      return Response.json({ ok: true });
+      return Response.json({ ok: true, result: { message_id: 1 } });
     }
     throw new Error(`unexpected fetch ${parsed.pathname}`);
   };
