@@ -4,11 +4,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { webcrypto } = require('node:crypto');
 
-async function loadWorker() {
-  const source = fs.readFileSync(path.join(__dirname, '..', 'worker.js'), 'utf8');
-  const encoded = Buffer.from(source).toString('base64');
-  return import(`data:text/javascript;base64,${encoded}#${Date.now()}-${Math.random()}`);
-}
+const { loadWorker, memoryDurableObjects } = require('../test-support/worker');
 
 test('worker stores and silences a successful Telecom claim receipt', async () => {
   const { default: worker } = await loadWorker();
@@ -78,7 +74,7 @@ test('worker intercepts Guangdong OTP only while a workflow lease is active', as
   globalThis.fetch = async url => {
     assert.equal(new URL(String(url)).hostname, 'api.telegram.org');
     telegramCalls += 1;
-    return Response.json({ ok: true });
+    return Response.json({ ok: true, result: { message_id: 1 } });
   };
 
   const kv = {
@@ -105,7 +101,7 @@ test('worker intercepts Guangdong OTP only while a workflow lease is active', as
     TELEGRAM_CHAT_ID: 'chat-id',
     FORWARDED_KV: kv,
     INTERCEPT_LEASES: {
-      getByName: () => ({
+      getByName: name => name === 'sms-delivery' ? deliveries.getByName(name) : ({
         fetch: request => coordinator.fetch(
           typeof request === 'string' ? new Request(request) : request,
         ),
@@ -113,6 +109,7 @@ test('worker intercepts Guangdong OTP only while a workflow lease is active', as
     },
   };
 
+  const deliveries = memoryDurableObjects(InterceptLeaseCoordinator, env);
   const sendWebhook = shortCode => worker.fetch(new Request(
     'https://worker.example.test/pushplus/webhook/callback-token',
     {
