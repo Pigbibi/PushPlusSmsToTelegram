@@ -10,7 +10,7 @@ async function sendTelegramMessage({ botToken, chatId, text }) {
     }),
   });
   const data = await res.json().catch(() => ({}));
-  if (!res.ok || data.ok === false) {
+  if (!res.ok || data.ok !== true) {
     throw new Error(`Telegram sendMessage failed: ${data.description || res.status}`);
   }
   return data.result;
