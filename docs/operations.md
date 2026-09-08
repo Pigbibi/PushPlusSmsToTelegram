@@ -187,12 +187,10 @@ silencing messages after the consumer workflow finishes.
 
 ## Data handling
 
-Forwarding now requires the existing `INTERCEPT_LEASES` Durable Object binding
-and its SQLite-backed `InterceptLeaseCoordinator` class. No additional binding
-or migration is introduced: delivery uses a separate object named
-`sms-delivery`. A KV-only deployment fails closed instead of sending without
-a durable claim. Deploying/configuring this prerequisite requires separate
-operator authorization.
+Forwarding requires the `INTERCEPT_LEASES` Durable Object binding and its
+SQLite-backed `InterceptLeaseCoordinator` class. Delivery uses an object named
+`sms-delivery`. Keep the binding and migration from `wrangler.example.toml` in
+your deployment configuration; a KV-only deployment cannot forward messages.
 
 The coordinator transactionally claims all salted message/fingerprint keys
 before sending. It stores only state, confirmed chunk counts, and completion

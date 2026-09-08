@@ -2,66 +2,23 @@
 
 [English](README.md)
 
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
-[![Node.js 20+](https://img.shields.io/badge/Node.js-20%2B-green.svg)](package.json)
-
-通过 Cloudflare Worker 把 PushPlus 收到的短信通知转发到 Telegram。服务支持去重、
-内容过滤、可选拦截规则，以及供其他授权自动化读取的短期受保护 inbox。
-
-## 架构
-
-直接部署：
+通过 Cloudflare Worker，将 PushPlus 或签名 webhook 收到的短信通知转发到 Telegram。支持过滤、持久化发送协调，以及可选的短期受保护收件箱。
 
 ```text
-短信转发器 → PushPlus → Cloudflare Worker → Telegram
+短信来源 → PushPlus 或签名 webhook → Worker → Telegram
 ```
 
-可选 relay：
-
-```text
-短信转发器 → PushPlus → Cloudflare Pages relay → Worker → Telegram
-```
-
-只有 PushPlus 无法访问 Worker 地址时才需要 relay。relay 校验 token 后转发请求，
-不会存储短信正文。
-
-推荐的高可用入口：
-
-```text
-短信转发器 ──主通道──→ Worker 直连 webhook ──→ Telegram
-          └─主通道最终失败后─→ PushPlus → relay → Worker ──┘
-```
-
-SmsForwarder 3.2.0 以上可把直连 webhook 放在第一位、PushPlus 放在第二位，
-并将规则执行逻辑设为“成功即止”。两个入口复用相同的过滤、临时拦截、Telegram
-投递和内容指纹去重逻辑。
-
-## 主要功能
-
-- 接收 PushPlus custom webhook 和 callback 通知。
-- 接收带 HMAC 签名和时间戳的 SmsForwarder 直连 webhook。
-- 使用 Cloudflare KV 去重。
-- 在直连和 PushPlus 入口之间按短信内容指纹去重。
-- 按标题或正文关键词过滤。
-- 从 Telegram 消息中移除可识别的设备状态元数据。
-- 在通知前应用自定义拦截规则。
-- 把指定消息写入带 token 的 inbox，TTL 为 6 小时。
-- 有界补偿实时链路漏掉的近期消息。
-- 通过 Cloudflare Cron 有界删除旧 PushPlus 记录。
-- 提供手动部署和补发用的 GitHub Actions workflow。
-- 每小时安静检查 Worker、VPS relay、PushPlus 生产 webhook 和 Telegram 会话权限。
+PushPlus 无法访问 Worker 时，可增加 Pages relay 入口。部署 relay 时必须明确配置自己的 Worker 地址。
 
 ## 运行要求
 
-- 本地开发使用 Node.js 20 或更高版本
-- 支持 Workers 和 KV 的 Cloudflare 账号
-- 能配置 custom webhook 的 PushPlus 账号
-- Telegram bot 和目标聊天
-- 手动部署需要 Wrangler
+- 本地开发和部署使用 Node.js 20+、Wrangler。
+- Cloudflare Workers、KV 和 SQLite Durable Object。
+- Telegram bot 和目标聊天；使用 PushPlus 功能时需配置其凭据。
 
 ## 快速开始
 
-### 1. 创建 KV
+创建部署配置：
 
 ```bash
 npm ci
@@ -69,36 +26,20 @@ cp wrangler.example.toml wrangler.toml
 npx wrangler kv namespace create FORWARDED_KV
 ```
 
-把返回的 namespace ID 写入本地 `wrangler.toml`，不要提交真实配置。
+将 KV namespace ID 写入 `wrangler.toml`。保留示例中的 `INTERCEPT_LEASES` binding 和 `InterceptLeaseCoordinator` migration，转发依赖这两个配置。个人部署配置不要提交到 Git。
 
-### 2. 配置 Worker secrets
+通过 Wrangler 交互式输入 secrets：
 
 ```bash
 npx wrangler secret put CALLBACK_TOKEN
 npx wrangler secret put TELEGRAM_BOT_TOKEN
 npx wrangler secret put TELEGRAM_CHAT_ID
 npx wrangler secret put STATE_SECRET
-npx wrangler secret put SMSFORWARDER_WEBHOOK_SECRET
 ```
 
-生成随机 token：
+使用独立随机密钥。签名直连入口还需 `SMSFORWARDER_WEBHOOK_SECRET`；其他可选凭据见[配置说明](docs/configuration.md)。
 
-```bash
-openssl rand -hex 32
-```
-
-受保护 inbox、漏发补偿和定时清理需要额外 secrets：
-
-```bash
-npx wrangler secret put INBOX_TOKEN
-npx wrangler secret put PUSHPLUS_TOKEN
-npx wrangler secret put PUSHPLUS_SECRET_KEY
-```
-
-`SMSFORWARDER_WEBHOOK_SECRET` 必须与手机 Webhook 发送通道里的 `secret` 完全一致，
-不得与 PushPlus、callback 或 inbox token 共用。
-
-### 3. 部署 Worker
+检查并部署：
 
 ```bash
 npm test
@@ -106,144 +47,38 @@ npm run lint
 npx wrangler deploy
 ```
 
-健康检查：
+访问 Worker 的 `/health`，配置所选发送端，再用受控测试消息在 Telegram 中验收。健康端点只能说明入口状态，不能证明短信送达。
 
-```text
-https://your-worker.example.com/health
-```
+## 选择接入方式
 
-直接 webhook：
+| 来源 | Worker 路径 | 配置要点 |
+| --- | --- | --- |
+| PushPlus 自定义 webhook | `/pushplus/webhook/<CALLBACK_TOKEN>` | 正文带 `{title}`、`{url}`、`{content}` |
+| 签名 SmsForwarder | `/smsforwarder/webhook` | HMAC 签名与时间戳 |
+| 硬件 SIM 网关 | `/device/webhook/<HARDWARE_WEBHOOK_TOKEN>` | 标准 POST JSON |
+| 可选 Pages relay | `/pushplus/webhook/<RELAY_TOKEN>` | 将 `WORKER_ORIGIN` 设置为自己的 Worker |
 
-```text
-https://your-worker.example.com/pushplus/webhook/YOUR_CALLBACK_TOKEN
-```
+具体请求格式和认证参数见[配置说明](docs/configuration.md)。不要分享包含 token 的 URL。
 
-插 SIM 卡硬件网关直连接口（标准 POST JSON）：
+## 发送与数据保存
 
-```text
-https://your-worker.example.com/device/webhook/YOUR_HARDWARE_WEBHOOK_TOKEN
-```
+Durable Object 在发送前占用消息，KV 保存去重镜像；不同入口的相同短信通过内容指纹减少重复转发。
 
-设备新增“POST JSON”通道并把它排在现有 PushPlus 通道之前；支持广播策略时选择
-“广播”，让两条链路同时保留，Worker 会统一去重。详细配置见
-[配置文档](docs/configuration.md#hardware-sim-gateway-webhook)。
+超时、响应未知和部分发送会保留禁止重发的状态。恢复前先核对目标聊天，不要通过清空状态或轮换 `STATE_SECRET` 强行重试。系统不承诺端到端恰好发送一次。
 
-SmsForwarder 直连 webhook：
+只有明确启用存储的拦截规则会将短信正文写入受保护收件箱，六小时后过期；普通转发保存加盐去重键。请按个人数据访问权限保护 bot、密钥和目标聊天。
 
-```text
-https://your-worker.example.com/smsforwarder/webhook
-```
-
-推荐使用 `POST`、`Content-Type: application/json`，成功应答关键字填写 `success`，
-请求参数填写：
-
-```json
-{
-  "sourceId": "md5([from]+[org_content]+[receive_time:yyyyMMddHHmmss]+[device_mark])",
-  "sender": "[from]",
-  "sentAt": "[receive_time:yyyy/MM/dd HH:mm:ss]",
-  "content": "[org_content]",
-  "timestamp": "[timestamp]",
-  "sign": "[sign]"
-}
-```
-
-把全局请求失败重试设为 3 次。规则同时选择直连 Webhook 和 PushPlus，直连排第一，
-执行逻辑选择“成功即止”。Worker 只有在 Telegram 投递成功或消息被明确过滤/临时拦截
-后才返回成功。
-
-如果 PushPlus 无法访问 `workers.dev`，优先为 Worker 配置 Cloudflare custom domain。
-
-### 4. 可选：部署 Pages relay
-
-```bash
-cd pages-relay
-npx wrangler pages project create your-pages-project \
-  --production-branch main
-npx wrangler pages secret put RELAY_TOKEN \
-  --project-name your-pages-project
-npx wrangler pages secret put WORKER_ORIGIN \
-  --project-name your-pages-project
-npx wrangler pages deploy dist \
-  --project-name your-pages-project --branch main
-```
-
-`WORKER_ORIGIN` 必须填写你自己的 Worker origin。Fork 用户必须覆盖它：仓库内 relay
-带有维护者部署地址作为 fallback，不能原样用于其他部署。
-
-relay webhook：
-
-```text
-https://your-pages-project.pages.dev/pushplus/webhook/YOUR_RELAY_TOKEN
-```
-
-### 5. 配置 PushPlus
-
-推荐使用纯文本 custom webhook 模板：
-
-```text
-标题：{title}
-链接：{url}
-
-{content}
-```
-
-启用旧记录清理时保留 `{url}`，Worker 会使用其中的 short code 关联已处理记录。
-
-可以使用仓库脚本配置 webhook：
-
-```bash
-PUSHPLUS_TOKEN='replace-me' \
-PUSHPLUS_SECRET_KEY='replace-me' \
-PUSHPLUS_WEBHOOK_URL='https://your-endpoint/pushplus/webhook/YOUR_TOKEN' \
-npm run configure:pushplus
-```
-
-脚本可能修改 PushPlus 用户的默认发送渠道。如果发送端会显式选择渠道，并且需要保留
-现有默认渠道，请设置 `PUSHPLUS_SET_USER_DEFAULT=false`。
-
-## 消息处理顺序
-
-1. 校验 webhook 或 callback token；
-2. callback 只有 short code 时，从 PushPlus 获取正文；
-3. 通过入口 ID 和规范化短信内容指纹跳过已经处理的消息；
-4. 应用拦截规则；
-5. 应用标题和正文过滤；
-6. 整理短信元数据并发送到 Telegram；
-7. 写入带 TTL 的去重标记。
-
-可选的尽力而为式定时补偿会复用相同的过滤、拦截和 KV 状态。`unhandled` 模式只认
-Worker 本地是否已有处理标记：即使 PushPlus 自报投递成功，只要历史记录仍可见且本地
-未处理，就会补转。设备根本没有送达 PushPlus 的短信不会出现在历史列表中，因此该功能
-不能替代 SIM 网关到 PushPlus 的网络连接。只有操作员设置启用时间并明确开启后，该功能
-才会运行。详细配置见
-[配置说明](docs/configuration.md#missed-message-recovery)。
-
-配置 `INBOX_TOKEN` 后才能访问受保护 inbox：
-
-```http
-GET /messages?since=...&sender=10001
-Authorization: Bearer <INBOX_TOKEN>
-```
-
-只有明确配置为 store 的规则会把短信正文写入 inbox，记录会在 6 小时后自动过期。
+定时补转发和记录清理需要明确启用，开启前先核对执行上限和生效起点。
 
 ## 文档
 
-- [配置说明](docs/configuration.md)
-- [部署与运维](docs/operations.md)
-- [贡献指南](CONTRIBUTING.md)
-- [安全策略](SECURITY.md)
-- [支持说明](SUPPORT.md)
+- [配置与请求格式](docs/configuration.md)
+- [部署、relay、补转发与排障](docs/operations.md)
 
-## 安全
+## 支持与贡献
 
-该服务处理个人短信，并可能转发验证码。应使用私有 Telegram 聊天、相互独立的随机
-token 和专属 Cloudflare 部署。不要提交 Worker secret、PushPlus 凭据、Telegram
-凭据、chat ID、短信正文或真实 `wrangler.toml`。
-
-安全问题请按 [SECURITY.md](SECURITY.md) 报告。
+[问题与支持](SUPPORT.md) · [贡献指南](CONTRIBUTING.md) · [安全问题](SECURITY.md) · [行为准则](CODE_OF_CONDUCT.md)
 
 ## 许可证
 
-本项目使用 [MIT License](LICENSE)。
+[MIT](LICENSE)。
