@@ -95,6 +95,7 @@ jobs:
             if (access.code !== 200 || !accessKey) throw new Error('Could not obtain PushPlus monitor access key');
 
             let deliveryStatus = 0;
+            let deliveryErrorMessage = '';
             for (let attempt = 1; attempt <= 20; attempt += 1) {
               const result = await requestJson(
                 `https://www.pushplus.plus/api/open/message/sendMessageResult?shortCode=${encodeURIComponent(submitted.data)}`,
@@ -102,10 +103,18 @@ jobs:
               );
               if (result.code !== 200) throw new Error('Could not query PushPlus monitor status');
               deliveryStatus = Number(result?.data?.status);
+              deliveryErrorMessage = String(result?.data?.errorMessage || '');
               if (deliveryStatus === 2 || deliveryStatus === 3) break;
               if (attempt < 20) await sleep(1_000);
             }
-            if (deliveryStatus !== 2) throw new Error(`PushPlus production webhook status ${deliveryStatus || 'pending'}`);
+            if (deliveryStatus !== 2) {
+              const detail = deliveryErrorMessage || 'no detail returned';
+              const safeDetail = detail
+                .replace(/\/pushplus\/webhook\/[^/?\s]+/gi, '/pushplus/webhook/[redacted]')
+                .replace(/([?&](?:token|key|secret|authorization)=)[^&\s]+/gi, '$1[redacted]')
+                .slice(0, 500);
+              throw new Error(`PushPlus production webhook status ${deliveryStatus || 'pending'}: ${safeDetail}`);
+            }
 
             const telegramChat = await requestJson(`${process.env.WORKER_ORIGIN}/diagnostics/telegram`, {
               method: 'POST',
