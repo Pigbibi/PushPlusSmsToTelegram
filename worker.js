@@ -349,7 +349,7 @@ function guangdongSsoPresetRules(env) {
     name: 'guangdong-sso-auth',
     action: 'silence-store',
     textIncludesAll: ['验证码'],
-    textIncludesAny: ['统一身份认证', '广东政务服务', '粤省事', '政务服务网'],
+    textIncludesAny: ['统一身份认证', '广东政务服务', '粤省事', '政务服务网', '深圳社保局'],
   };
   if (env.GUANGDONG_SMS_SENDER) rule.senderIncludes = env.GUANGDONG_SMS_SENDER;
   if (env.GUANGDONG_SMS_KEYWORD) rule.textIncludesAny = [env.GUANGDONG_SMS_KEYWORD];
