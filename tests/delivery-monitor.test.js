@@ -12,6 +12,9 @@ test('scheduled monitor checks production ingress quietly', () => {
   assert.match(workflow, /schedule:/);
   assert.match(workflow, /13 \* \* \* \*/);
   assert.match(workflow, /PUSHPLUS_VPS_RELAY_BASE_URL/);
+  assert.match(workflow, /PUSHPLUS_MONITOR_DELIVERY_ATTEMPTS:\s*3/);
+  assert.match(workflow, /isTransientDeliveryFailure/);
+  assert.match(workflow, /deliveryAttempt < deliveryAttempts/);
   assert.match(workflow, /sendMessageResult/);
   assert.match(workflow, /diagnostics\/telegram/);
   assert.match(workflow, /secrets\.INBOX_TOKEN/);

@@ -22,6 +22,8 @@ jobs:
       RELAY_TOKEN: ${{ secrets.RELAY_TOKEN }}
       INBOX_TOKEN: ${{ secrets.INBOX_TOKEN }}
       PUSHPLUS_VPS_RELAY_BASE_URL: ${{ vars.PUSHPLUS_VPS_RELAY_BASE_URL || '' }}
+      PUSHPLUS_MONITOR_DELIVERY_ATTEMPTS: 3
+      PUSHPLUS_MONITOR_DELIVERY_RETRY_MS: 15000
       WORKER_ORIGIN: https://pushplus-sms-to-telegram.pigbibi.workers.dev
       MONITOR_SOURCE_ID: delivery-monitor-${{ github.run_id }}-${{ github.run_attempt }}
 
@@ -43,6 +45,19 @@ jobs:
             const data = await response.json().catch(() => ({}));
             if (!response.ok) throw new Error(`HTTP ${response.status} ${new URL(url).pathname}`);
             return data;
+          }
+
+          function isTransientDeliveryFailure(detail) {
+            return /connect(?:ion)? timed out|sockettimeoutexception|i\/o error|econnreset|econnrefused|bad gateway|gateway timeout/i.test(
+              String(detail || ''),
+            );
+          }
+
+          function safeDeliveryDetail(detail) {
+            return String(detail || 'no detail returned')
+              .replace(/\/pushplus\/webhook\/[^/?\s]+/gi, '/pushplus/webhook/[redacted]')
+              .replace(/([?&](?:token|key|secret|authorization)=)[^&\s]+/gi, '$1[redacted]')
+              .slice(0, 500);
           }
 
           async function main() {
@@ -72,17 +87,6 @@ jobs:
             });
             if (relayHealth.code !== 200) throw new Error('VPS relay health check failed');
 
-            const submitted = await requestJson('https://www.pushplus.plus/send', {
-              method: 'POST',
-              headers: { accept: 'application/json', 'content-type': 'application/json' },
-              body: JSON.stringify({
-                token: process.env.PUSHPLUS_TOKEN,
-                title: 'Relay health monitor',
-                content: `Quiet PushPlus reachability check ${process.env.MONITOR_SOURCE_ID}`,
-              }),
-            });
-            if (submitted.code !== 200 || !submitted.data) throw new Error('PushPlus monitor request was rejected');
-
             const access = await requestJson('https://www.pushplus.plus/api/common/openApi/getAccessKey', {
               method: 'POST',
               headers: { accept: 'application/json', 'content-type': 'application/json' },
@@ -94,26 +98,61 @@ jobs:
             const accessKey = access?.data?.accessKey;
             if (access.code !== 200 || !accessKey) throw new Error('Could not obtain PushPlus monitor access key');
 
+            const deliveryAttempts = Math.max(
+              1,
+              Math.min(3, Number(process.env.PUSHPLUS_MONITOR_DELIVERY_ATTEMPTS) || 1),
+            );
+            const deliveryRetryMs = Math.max(
+              1_000,
+              Math.min(30_000, Number(process.env.PUSHPLUS_MONITOR_DELIVERY_RETRY_MS) || 15_000),
+            );
             let deliveryStatus = 0;
             let deliveryErrorMessage = '';
-            for (let attempt = 1; attempt <= 20; attempt += 1) {
-              const result = await requestJson(
-                `https://www.pushplus.plus/api/open/message/sendMessageResult?shortCode=${encodeURIComponent(submitted.data)}`,
-                { headers: { accept: 'application/json', 'access-key': accessKey } },
-              );
-              if (result.code !== 200) throw new Error('Could not query PushPlus monitor status');
-              deliveryStatus = Number(result?.data?.status);
-              deliveryErrorMessage = String(result?.data?.errorMessage || '');
-              if (deliveryStatus === 2 || deliveryStatus === 3) break;
-              if (attempt < 20) await sleep(1_000);
+            for (let deliveryAttempt = 1; deliveryAttempt <= deliveryAttempts; deliveryAttempt += 1) {
+              const submitted = await requestJson('https://www.pushplus.plus/send', {
+                method: 'POST',
+                headers: { accept: 'application/json', 'content-type': 'application/json' },
+                body: JSON.stringify({
+                  token: process.env.PUSHPLUS_TOKEN,
+                  title: 'Relay health monitor',
+                  content: `Quiet PushPlus reachability check ${process.env.MONITOR_SOURCE_ID}-${deliveryAttempt}`,
+                }),
+              });
+              if (submitted.code !== 200 || !submitted.data) {
+                throw new Error('PushPlus monitor request was rejected');
+              }
+
+              deliveryStatus = 0;
+              deliveryErrorMessage = '';
+              for (let statusAttempt = 1; statusAttempt <= 20; statusAttempt += 1) {
+                const result = await requestJson(
+                  `https://www.pushplus.plus/api/open/message/sendMessageResult?shortCode=${encodeURIComponent(submitted.data)}`,
+                  { headers: { accept: 'application/json', 'access-key': accessKey } },
+                );
+                if (result.code !== 200) throw new Error('Could not query PushPlus monitor status');
+                deliveryStatus = Number(result?.data?.status);
+                deliveryErrorMessage = String(result?.data?.errorMessage || '');
+                if (deliveryStatus === 2 || deliveryStatus === 3) break;
+                if (statusAttempt < 20) await sleep(1_000);
+              }
+              if (deliveryStatus === 2) break;
+              if (
+                deliveryAttempt < deliveryAttempts
+                && deliveryStatus === 3
+                && isTransientDeliveryFailure(deliveryErrorMessage)
+              ) {
+                console.warn(
+                  `Transient PushPlus delivery failure on attempt ${deliveryAttempt}/${deliveryAttempts}; retrying after ${deliveryRetryMs}ms.`,
+                );
+                await sleep(deliveryRetryMs);
+                continue;
+              }
+              break;
             }
             if (deliveryStatus !== 2) {
-              const detail = deliveryErrorMessage || 'no detail returned';
-              const safeDetail = detail
-                .replace(/\/pushplus\/webhook\/[^/?\s]+/gi, '/pushplus/webhook/[redacted]')
-                .replace(/([?&](?:token|key|secret|authorization)=)[^&\s]+/gi, '$1[redacted]')
-                .slice(0, 500);
-              throw new Error(`PushPlus production webhook status ${deliveryStatus || 'pending'}: ${safeDetail}`);
+              throw new Error(
+                `PushPlus production webhook status ${deliveryStatus || 'pending'}: ${safeDeliveryDetail(deliveryErrorMessage)}`,
+              );
             }
 
             const telegramChat = await requestJson(`${process.env.WORKER_ORIGIN}/diagnostics/telegram`, {
