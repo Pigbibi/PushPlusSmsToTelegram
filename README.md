@@ -1,6 +1,6 @@
 # PushPlusSmsToTelegram
 
-[简体中文](README_CN.md)
+[简体中文](README.zh-CN.md)
 
 Forward SMS notifications from PushPlus or a signed direct webhook to a Telegram chat through a Cloudflare Worker. Includes message filtering, durable delivery coordination and an optional short-lived protected inbox.
 
