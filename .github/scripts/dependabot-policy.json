@@ -1,0 +1,17 @@
+{
+  "repo": "Pigbibi/PushPlusSmsToTelegram",
+  "branch": "main",
+  "files": [
+    "package-lock.json",
+    "package.json"
+  ],
+  "directories": [
+    "/",
+    "/.github"
+  ],
+  "required_checks": [
+    "test",
+    "Repository hygiene",
+    "Safe dependency update"
+  ]
+}
