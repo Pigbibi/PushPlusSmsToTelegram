@@ -2,18 +2,9 @@
 
 Security fixes target the latest release and `main` branch.
 
-## Reporting
+## Reporting a vulnerability
 
-Do not open a public issue containing PushPlus credentials, Telegram bot tokens,
-chat IDs, Cloudflare tokens, callback or inbox tokens, private Worker origins,
-SMS content, or exploit details. Use GitHub's
-[private vulnerability reporting](https://github.com/Pigbibi/PushPlusSmsToTelegram/security/advisories/new).
-If that form is unavailable, ask for a private contact through information on
-the repository owner's GitHub profile without sharing technical details
-publicly.
-
-Include the affected commit, route, attacker access, reproduction steps, data
-exposed, and suggested mitigation in the private report.
+Report security vulnerabilities through [GitHub private vulnerability reporting](https://github.com/Pigbibi/PushPlusSmsToTelegram/security/advisories/new). Do not post exploit details, credentials, private sessions or personal data in public issues or PRs. Include the affected version, impact and minimal redacted reproduction. The maintainer handles reports on a best-effort basis; no bounty or response-time guarantee is implied.
 
 ## Relevant issues
 
