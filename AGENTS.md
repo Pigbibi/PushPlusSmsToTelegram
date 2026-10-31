@@ -55,6 +55,8 @@ npm test
 
 ## 不要做
 
+- 只有所有者或经所有者明确授权的审查者可以添加 `owner-approved` 标签；编码智能体绝不能给自己的 PR 添加该标签。
+
 - 不要在代码里写死 Bot token、chat id 或 webhook 签名密钥。全部走 Worker secrets。
 - 不要放宽 webhook 签名校验。那是这个服务唯一的入口防护。
 - 不要在日志里打印短信正文。
