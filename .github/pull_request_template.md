@@ -20,3 +20,11 @@ Describe authentication, message privacy, retention, routing, or deletion risk.
 - [ ] Examples and logs contain no credentials, origins, chat IDs, or SMS content.
 - [ ] Configuration and both README files are updated when needed.
 - [ ] Cleanup and storage remain opt-in and bounded.
+
+## AI assistance
+
+Which AI tool and model were used? Write `None` if no AI was used.
+
+## What changed
+
+Describe the change and its purpose.
