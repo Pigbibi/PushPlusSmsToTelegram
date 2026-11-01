@@ -9,7 +9,8 @@ on:
         default: "false"
 
 permissions:
-  contents: write
+  contents: read
+  id-token: write
 
 concurrency:
   group: pushplus-sms-to-telegram
@@ -36,6 +37,7 @@ jobs:
       TELECOM_CONFIRM_PLAN_ID: ${{ vars.TELECOM_CONFIRM_PLAN_ID || '' }}
       POLL_LOOKBACK_MINUTES: ${{ vars.POLL_LOOKBACK_MINUTES || '60' }}
       DRY_RUN: ${{ github.event.inputs.dry_run || 'false' }}
+      PRIVATE_STATE_BUCKET: ${{ vars.PRIVATE_STATE_BUCKET }}
       STATE_FILE: .state/forwarded.json
 
     steps:
@@ -52,40 +54,31 @@ jobs:
       - run: npm test
       - run: npm run lint
 
-      - name: Restore forwarded state
-        run: |
-          set -euo pipefail
-          mkdir -p .state
-          if git ls-remote --exit-code --heads origin state >/dev/null 2>&1; then
-            git fetch origin state:refs/remotes/origin/state
-            git show origin/state:forwarded.json > .state/forwarded.json || echo '{"forwarded":[]}' > .state/forwarded.json
-          else
-            echo '{"forwarded":[]}' > .state/forwarded.json
-          fi
+      - name: Authenticate private state storage
+        uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093
+        with:
+          workload_identity_provider: ${{ vars.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ vars.GCP_SERVICE_ACCOUNT }}
+
+      - name: Set up private state storage client
+        uses: google-github-actions/setup-gcloud@aa5489c8933f4cc7a4f7d45035b3b1440c9c10db
+
+      - name: Restore forwarded state from private storage
+        run: node scripts/private-state.js restore
 
       - name: Forward messages
         run: npm run forward
 
-      - name: Persist forwarded state
+      - name: Scan state before storage
+        uses: QuantStrategyLab/.github/actions/scan-before-publish@0da4da68433b803cda17d3f84e29875a94a32273
+        with:
+          path: .state
+
+      - name: Persist forwarded state in private storage
+        if: success()
+        run: node scripts/private-state.js persist
+
+      - name: Record last success time
         if: success()
         run: |
-          set -euo pipefail
-          tmpdir="$(mktemp -d)"
-          cp .state/forwarded.json "$tmpdir/forwarded.json"
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          if git ls-remote --exit-code --heads origin state >/dev/null 2>&1; then
-            git fetch origin state:refs/remotes/origin/state
-            git switch --detach origin/state
-          else
-            git switch --orphan state
-            git rm -rf . >/dev/null 2>&1 || true
-          fi
-          cp "$tmpdir/forwarded.json" forwarded.json
-          git add forwarded.json
-          if git diff --cached --quiet; then
-            echo "No forwarded state changes."
-          else
-            git commit -m "Update forwarded state"
-            git push origin HEAD:state
-          fi
+          printf 'Last success: %s\n' "$(date -u +'%Y-%m-%dT%H:%M:%SZ')" >> "$GITHUB_STEP_SUMMARY"
