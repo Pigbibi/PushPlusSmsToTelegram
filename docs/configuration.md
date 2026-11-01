@@ -275,3 +275,17 @@ disabled before opting in.
 Keep `{url}` in the custom webhook body so the Worker can derive the short code
 used by cleanup. The deduplication marker TTL is longer than the default cleanup
 retention window.
+
+
+## Inbox read caching
+
+Authenticated inbox reads share one raw KV snapshot for five seconds per Worker
+isolate and binding. Token checks and sender/time/limit filters run on every
+request. Local inbox writes invalidate the snapshot before and after storage I/O;
+failed scans are evicted. External writes may appear after this extra five-second
+window plus normal KV propagation. The cache performs no KV writes and does not
+cache authorization or delivery decisions.
+
+SmsForwarder reuses one imported HMAC verification key for the current configured
+secret. Secret changes replace it immediately; every webhook still verifies its
+signature and timestamp. Failed imports are retryable.
