@@ -9,3 +9,19 @@
 # Risk-sensitive changes require the repository owner.
 /.github/CODEOWNERS @Pigbibi
 /.github/workflows/ @Pigbibi
+
+# Dependency-only files do not automatically request a human review.
+# CODEOWNERS is path-based: these exceptions also apply to human PRs.
+/.github/requirements-ci.txt
+/.github/workflows/delivery-diagnostic.yml
+/.github/workflows/delivery-monitor.yml
+/.github/workflows/dependabot-auto-merge.yml
+/.github/workflows/dependabot-policy.yml
+/.github/workflows/deploy.yml
+/.github/workflows/engineering-governance.yml
+/.github/workflows/forward.yml
+/.github/workflows/offline-regression.yml
+/.github/workflows/repository-hygiene.yml
+/.github/workflows/risk-gate.yml
+/package-lock.json
+/package.json
