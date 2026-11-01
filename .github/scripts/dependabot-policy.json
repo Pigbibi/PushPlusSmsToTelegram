@@ -2,6 +2,7 @@
   "repo": "Pigbibi/PushPlusSmsToTelegram",
   "branch": "main",
   "files": [
+    ".github/requirements-ci.txt",
     "package-lock.json",
     "package.json"
   ],
@@ -13,5 +14,17 @@
     "test",
     "Repository hygiene",
     "Safe dependency update"
+  ],
+  "action_files": [
+    ".github/workflows/delivery-diagnostic.yml",
+    ".github/workflows/delivery-monitor.yml",
+    ".github/workflows/dependabot-auto-merge.yml",
+    ".github/workflows/dependabot-policy.yml",
+    ".github/workflows/deploy.yml",
+    ".github/workflows/engineering-governance.yml",
+    ".github/workflows/forward.yml",
+    ".github/workflows/offline-regression.yml",
+    ".github/workflows/repository-hygiene.yml",
+    ".github/workflows/risk-gate.yml"
   ]
 }
