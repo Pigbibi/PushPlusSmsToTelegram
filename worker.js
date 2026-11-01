@@ -1023,13 +1023,35 @@ async function storeInboxMessage(env, message) {
   const timestamp = Number(message.receivedAt);
   const receivedAt = Number.isFinite(timestamp) ? timestamp : Date.now();
   const sourceId = message.sourceId || message.shortCode || message.url || await sha256Hex(`${message.title || ''}\n${text}`);
-  await env.FORWARDED_KV.put(await inboxKey(sourceId, receivedAt, env), JSON.stringify({
+  inboxSnapshots.delete(env.FORWARDED_KV);
+  try { await env.FORWARDED_KV.put(await inboxKey(sourceId, receivedAt, env), JSON.stringify({
     id: sourceId,
     sender: fields.sender || '',
     text,
     receivedAt,
     title: message.title || '',
-  }), { expirationTtl: INBOX_TTL_SECONDS });
+  }), { expirationTtl: INBOX_TTL_SECONDS }); }
+  finally { inboxSnapshots.delete(env.FORWARDED_KV); }
+}
+
+const inboxSnapshots = new WeakMap();
+
+async function inboxMessages(store) {
+  let entry = inboxSnapshots.get(store);
+  if (!entry || entry.until <= Date.now()) {
+    entry = { until: Date.now() + 5000, promise: (async () => {
+      const list = await store.list({ prefix: 'inbox:' });
+      const messages = [];
+      for (const key of list.keys) {
+        const raw = await store.get(key.name);
+        if (raw) messages.push(JSON.parse(raw));
+      }
+      return messages;
+    })() };
+    inboxSnapshots.set(store, entry);
+    entry.promise.catch(() => { if (inboxSnapshots.get(store) === entry) inboxSnapshots.delete(store); });
+  }
+  return entry.promise;
 }
 
 async function processMessages(request, env, url) {
@@ -1042,12 +1064,8 @@ async function processMessages(request, env, url) {
   const since = Number(url.searchParams.get('since') || 0);
   const sender = url.searchParams.get('sender') || '';
   const limit = Math.max(1, Math.min(Number(url.searchParams.get('limit') || 30), 100));
-  const list = await env.FORWARDED_KV.list({ prefix: 'inbox:' });
   const messages = [];
-  for (const key of list.keys) {
-    const raw = await env.FORWARDED_KV.get(key.name);
-    if (!raw) continue;
-    const msg = JSON.parse(raw);
+  for (const msg of await inboxMessages(env.FORWARDED_KV)) {
     if (since && Number(msg.receivedAt || 0) < since) continue;
     if (sender && !String(msg.sender || msg.text || '').includes(sender)) continue;
     messages.push(msg);
@@ -1211,6 +1229,17 @@ function decodeBase64Signature(value) {
   }
 }
 
+let smsVerificationKey;
+function smsKey(secret) {
+  if (!smsVerificationKey || smsVerificationKey.secret !== secret) {
+    const entry = { secret, promise: crypto.subtle.importKey('raw', new TextEncoder().encode(secret),
+      { name: 'HMAC', hash: 'SHA-256' }, false, ['verify']) };
+    smsVerificationKey = entry;
+    entry.promise.catch(() => { if (smsVerificationKey === entry) smsVerificationKey = undefined; });
+  }
+  return smsVerificationKey.promise;
+}
+
 async function authorizeSmsForwarderPayload(payload, env) {
   const secret = String(env.SMSFORWARDER_WEBHOOK_SECRET || '');
   if (!secret) throw new Error('Missing env: SMSFORWARDER_WEBHOOK_SECRET');
@@ -1224,13 +1253,7 @@ async function authorizeSmsForwarderPayload(payload, env) {
     { min: 60, max: 24 * 60 * 60 },
   );
   if (Math.abs(Date.now() - timestamp) > maxClockSkewSeconds * 1000) return false;
-  const key = await crypto.subtle.importKey(
-    'raw',
-    new TextEncoder().encode(secret),
-    { name: 'HMAC', hash: 'SHA-256' },
-    false,
-    ['verify'],
-  );
+  const key = await smsKey(secret);
   return crypto.subtle.verify(
     'HMAC',
     key,
