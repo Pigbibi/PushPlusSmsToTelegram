@@ -1,10 +1,9 @@
-const test = require('node:test');
-const assert = require('node:assert/strict');
-const fs = require('node:fs');
-const path = require('node:path');
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import fs from 'node:fs';
 
 function read(relativePath) {
-  return fs.readFileSync(path.join(__dirname, '..', relativePath), 'utf8');
+  return fs.readFileSync(new URL(`../${relativePath}`, import.meta.url), 'utf8');
 }
 
 test('scheduled monitor checks production ingress quietly', () => {

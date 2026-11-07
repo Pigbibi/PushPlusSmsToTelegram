@@ -1,39 +1,13 @@
-const { htmlToText } = require('./text');
-
-const DEFAULT_BASE_URL = 'https://www.pushplus.plus';
-
-function pushPlusUrl(baseUrl, pathname) {
-  const base = baseUrl || DEFAULT_BASE_URL;
-  return new URL(pathname, base.endsWith('/') ? base : `${base}/`);
-}
-
-function parsePushPlusUpdateTime(value) {
-  if (value === undefined || value === null || value === '') return 0;
-  if (typeof value === 'number') return value < 1e12 ? value * 1000 : value;
-  const text = String(value).trim();
-  if (/^\d+$/.test(text)) {
-    const timestamp = Number(text);
-    return timestamp < 1e12 ? timestamp * 1000 : timestamp;
-  }
-  if (/([zZ]|[+-]\d\d:?\d\d)$/.test(text)) {
-    const parsed = Date.parse(text);
-    return Number.isNaN(parsed) ? 0 : parsed;
-  }
-  const m = text.match(/^(\d{4})-(\d{2})-(\d{2})[ T](\d{2}):(\d{2})(?::(\d{2}))?/);
-  if (m) {
-    const [, year, month, day, hour, minute, second = '0'] = m;
-    return Date.UTC(Number(year), Number(month) - 1, Number(day), Number(hour) - 8, Number(minute), Number(second));
-  }
-  const parsed = Date.parse(text);
-  return Number.isNaN(parsed) ? 0 : parsed;
-}
+import {
+  htmlToText,
+  parsePushPlusUpdateTime,
+  pushPlusAccessKeyRequest,
+  pushPlusUrl,
+} from './pipeline.js';
 
 async function getAccessKey({ token, secretKey, baseUrl }) {
-  const res = await fetch(pushPlusUrl(baseUrl, '/api/common/openApi/getAccessKey'), {
-    method: 'POST',
-    headers: { 'content-type': 'application/json', accept: 'application/json' },
-    body: JSON.stringify({ token, secretKey }),
-  });
+  const request = pushPlusAccessKeyRequest(baseUrl, { token, secretKey });
+  const res = await fetch(request.url, request.options);
   if (!res.ok) throw new Error(`PushPlus access key HTTP ${res.status}`);
   const data = await res.json();
   const accessKey = data?.data?.accessKey;
@@ -94,11 +68,4 @@ async function fetchRecentMessages(config) {
   return messages.sort((a, b) => Number(a.receivedAt || 0) - Number(b.receivedAt || 0));
 }
 
-module.exports = {
-  fetchRecentMessages,
-  getAccessKey,
-  getMessageDetail,
-  listMessages,
-  parsePushPlusUpdateTime,
-  pushPlusUrl,
-};
+export { fetchRecentMessages };

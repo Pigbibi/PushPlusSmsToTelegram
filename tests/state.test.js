@@ -1,6 +1,6 @@
-const test = require('node:test');
-const assert = require('node:assert/strict');
-const { messageId, markForwarded, hasForwarded } = require('../src/state');
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import { messageId, markForwarded, hasForwarded } from '../src/state.js';
 
 test('uses HMAC ids for public state', () => {
   const id = messageId({ shortCode: 'abc123' }, 'state-secret');
