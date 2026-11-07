@@ -17,12 +17,13 @@ function saveState(file, state) {
   fs.mkdirSync(path.dirname(file), { recursive: true });
   const forwarded = Array.from(new Map((state.forwarded || []).map(item => [item.id, item])).values())
     .sort((a, b) => String(a.forwardedAt || '').localeCompare(String(b.forwardedAt || '')))
-    .slice(-1000);
+    .slice(-1000)
+    .map(({ id, forwardedAt }) => ({ id, forwardedAt }));
   fs.writeFileSync(file, `${JSON.stringify({ forwarded }, null, 2)}\n`, { mode: 0o600 });
 }
 
 function messageId(message, secret) {
-  if (!secret) throw new Error('Missing STATE_SECRET. Use a random secret so public state files do not expose PushPlus shortCode values.');
+  if (!secret) throw new Error('Missing STATE_SECRET. Use a random secret so state records do not expose PushPlus shortCode values.');
   return crypto.createHmac('sha256', secret)
     .update(String(message.shortCode || ''))
     .digest('hex');
