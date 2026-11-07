@@ -234,17 +234,20 @@ function guangdongSsoPresetRules(env) {
   return [rule];
 }
 
-// One registry so a preset that can be leased and its rules cannot drift apart.
-const PRESET_RULES = {
-  'telecom-claim-silent': telecomClaimPresetRules,
-  'guangdong-sso-auth': guangdongSsoPresetRules,
+// One registry holds a preset's rules and whether a workflow may hold it
+// active, so the lease endpoints cannot accept a preset that has no rules.
+const PRESETS = {
+  'telecom-claim-silent': { leaseable: true, build: telecomClaimPresetRules },
+  'guangdong-sso-auth': { leaseable: true, build: guangdongSsoPresetRules },
 };
 
-export const WORKFLOW_LEASED_PRESETS = new Set(Object.keys(PRESET_RULES));
+export const WORKFLOW_LEASED_PRESETS = new Set(
+  Object.entries(PRESETS).filter(([, preset]) => preset.leaseable).map(([name]) => name),
+);
 
 function interceptPresetRules(preset, env) {
-  const build = PRESET_RULES[preset];
-  return build ? build(env) : [];
+  const entry = PRESETS[preset];
+  return entry ? entry.build(env) : [];
 }
 
 function splitCsv(value) {
