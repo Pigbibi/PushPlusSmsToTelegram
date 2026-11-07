@@ -1,8 +1,14 @@
 #!/usr/bin/env node
 import { fetchRecentMessages } from './pushplus.js';
 import { loadState, saveState, messageId, hasForwarded, markForwarded } from './state.js';
-import { findInterceptRule, interceptShouldSilence, loadInterceptRules } from './interceptors.js';
-import { buildTelegramText, splitTelegramText, parseSmsFields } from './text.js';
+import {
+  buildTelegramText,
+  findInterceptRule,
+  interceptShouldSilence,
+  loadInterceptRules,
+  parseSmsFields,
+  splitTelegramText,
+} from './pipeline.js';
 import { sendTelegramMessage } from './telegram.js';
 
 function env(name, fallback = '') {
