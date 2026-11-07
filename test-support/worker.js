@@ -1,7 +1,7 @@
-const fs = require('node:fs');
-const path = require('node:path');
+const workerUrl = new URL('../worker.js', import.meta.url);
+let loadCount = 0;
 
-function memoryDurableObjects(Coordinator, env) {
+export function memoryDurableObjects(Coordinator, env) {
   const stores = new Map();
   const instances = new Map();
   function storageFor(name) {
@@ -46,9 +46,13 @@ function memoryDurableObjects(Coordinator, env) {
   };
 }
 
-async function loadWorker({ withCoordinator = true } = {}) {
-  const source = fs.readFileSync(path.join(__dirname, '..', 'worker.js'), 'utf8');
-  const module = await import(`data:text/javascript;base64,${Buffer.from(source).toString('base64')}#${Date.now()}-${Math.random()}`);
+// Each load gets a fresh module instance, so the Worker's module-level caches
+// (PushPlus access key, HMAC key, inbox snapshot) cannot leak between tests.
+export async function loadWorker({ withCoordinator = true } = {}) {
+  loadCount += 1;
+  const instanceUrl = new URL(workerUrl);
+  instanceUrl.searchParams.set('load', String(loadCount));
+  const module = await import(instanceUrl.href);
   if (!withCoordinator) return module;
   const bindings = new WeakMap();
   function prepared(env) {
@@ -64,5 +68,3 @@ async function loadWorker({ withCoordinator = true } = {}) {
     },
   };
 }
-
-module.exports = { loadWorker, memoryDurableObjects };

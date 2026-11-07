@@ -1,4 +1,4 @@
-const { htmlToText } = require('./text');
+import { htmlToText } from './text.js';
 
 const DEFAULT_BASE_URL = 'https://www.pushplus.plus';
 
@@ -94,7 +94,7 @@ async function fetchRecentMessages(config) {
   return messages.sort((a, b) => Number(a.receivedAt || 0) - Number(b.receivedAt || 0));
 }
 
-module.exports = {
+export {
   fetchRecentMessages,
   getAccessKey,
   getMessageDetail,

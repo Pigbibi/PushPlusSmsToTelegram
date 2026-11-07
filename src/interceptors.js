@@ -1,4 +1,4 @@
-const { parseSmsFields } = require('./text');
+import { parseSmsFields } from './text.js';
 
 function compactText(text) {
   return String(text || '').replace(/\s+/g, '');
@@ -145,7 +145,7 @@ function interceptShouldSilence(rule) {
   return /silence/.test(interceptAction(rule));
 }
 
-module.exports = {
+export {
   compactText,
   findInterceptRule,
   guangdongSsoPresetRules,

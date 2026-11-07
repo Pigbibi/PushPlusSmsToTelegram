@@ -1,10 +1,8 @@
-const test = require('node:test');
-const assert = require('node:assert/strict');
-const fs = require('node:fs');
-const path = require('node:path');
-const { webcrypto } = require('node:crypto');
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import { webcrypto } from 'node:crypto';
 
-const { loadWorker, memoryDurableObjects } = require('../test-support/worker');
+import { loadWorker, memoryDurableObjects } from '../test-support/worker.js';
 
 test('worker stores and silences a successful Telecom claim receipt', async () => {
   const { default: worker } = await loadWorker();

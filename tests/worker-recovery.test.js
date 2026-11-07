@@ -1,10 +1,9 @@
-const test = require('node:test');
-const assert = require('node:assert/strict');
-const fs = require('node:fs');
-const path = require('node:path');
-const { webcrypto } = require('node:crypto');
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import { webcrypto } from 'node:crypto';
 
-const { loadWorker } = require('../test-support/worker');
+import { loadWorker } from '../test-support/worker.js';
 
 async function workerDedupeKey(secret, sourceId) {
   const input = new TextEncoder().encode(`${secret}:${sourceId}`);
@@ -409,8 +408,8 @@ test('recovery summary can be disabled without disabling delivery', async () => 
 });
 
 test('deployment exposes recovery without a maintainer-specific endpoint', () => {
-  const workflow = fs.readFileSync(path.join(__dirname, '..', '.github', 'workflows', 'deploy.yml'), 'utf8');
-  const wrangler = fs.readFileSync(path.join(__dirname, '..', 'wrangler.example.toml'), 'utf8');
+  const workflow = fs.readFileSync(new URL('../.github/workflows/deploy.yml', import.meta.url), 'utf8');
+  const wrangler = fs.readFileSync(new URL('../wrangler.example.toml', import.meta.url), 'utf8');
   const settings = [
     'PUSHPLUS_RECOVERY_ENABLED',
     'PUSHPLUS_RECOVERY_MODE',

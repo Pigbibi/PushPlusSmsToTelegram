@@ -1,10 +1,8 @@
-const test = require('node:test');
-const assert = require('node:assert/strict');
-const fs = require('node:fs');
-const path = require('node:path');
-const { webcrypto } = require('node:crypto');
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import { webcrypto } from 'node:crypto';
 
-const { loadWorker } = require('../test-support/worker');
+import { loadWorker } from '../test-support/worker.js';
 
 async function workerDedupeKey(secret, sourceId) {
   const input = new TextEncoder().encode(`${secret}:${sourceId}`);

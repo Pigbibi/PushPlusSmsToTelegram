@@ -123,7 +123,7 @@ function splitTelegramText(text, maxLength = 3900) {
   return chunks;
 }
 
-module.exports = {
+export {
   decodeHtmlEntities,
   extractSmsContent,
   htmlToText,

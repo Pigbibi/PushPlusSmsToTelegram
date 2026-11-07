@@ -1,19 +1,19 @@
-const test = require('node:test');
-const assert = require('node:assert/strict');
-const {
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import {
   extractSmsContent,
   htmlToText,
   parseSmsFields,
   buildTelegramText,
   splitTelegramText,
-} = require('../src/text');
-const {
+} from '../src/text.js';
+import {
   findInterceptRule,
   interceptShouldSilence,
   interceptShouldStore,
   loadInterceptRules,
   messageMatchesRule,
-} = require('../src/interceptors');
+} from '../src/interceptors.js';
 
 test('converts PushPlus html to text', () => {
   const text = htmlToText('<p>验证码&#65306;406560&nbsp;</p><script>ignore()</script><div>发件号码:10001</div>');

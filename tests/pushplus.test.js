@@ -1,6 +1,6 @@
-const test = require('node:test');
-const assert = require('node:assert/strict');
-const { parsePushPlusUpdateTime } = require('../src/pushplus');
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import { parsePushPlusUpdateTime } from '../src/pushplus.js';
 
 test('parses PushPlus local updateTime as UTC+8', () => {
   assert.equal(

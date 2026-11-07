@@ -1,6 +1,6 @@
-const test = require('node:test');
-const assert = require('node:assert/strict');
-const { loadWorker } = require('../test-support/worker');
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import { loadWorker } from '../test-support/worker.js';
 
 test('authenticated inbox bursts reuse KV pages while TTL and token checks remain active', async () => {
   const {default:worker} = await loadWorker();

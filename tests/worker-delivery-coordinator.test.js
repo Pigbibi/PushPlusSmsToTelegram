@@ -1,7 +1,7 @@
-const test = require('node:test');
-const assert = require('node:assert/strict');
-const { webcrypto } = require('node:crypto');
-const { loadWorker, memoryDurableObjects } = require('../test-support/worker');
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import { webcrypto } from 'node:crypto';
+import { loadWorker, memoryDurableObjects } from '../test-support/worker.js';
 
 async function setup(t) {
   const module = await loadWorker({ withCoordinator: false });
