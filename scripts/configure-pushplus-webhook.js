@@ -33,7 +33,10 @@ async function requestJson(url, options = {}) {
 }
 
 async function getAccessKey(config) {
-  const request = pushPlusAccessKeyRequest(config.baseUrl, config);
+  const request = pushPlusAccessKeyRequest(config.baseUrl, {
+    token: config.token,
+    secretKey: config.secretKey,
+  });
   const data = await requestJson(request.url, request.options);
   if (data.code !== 200 || !data?.data?.accessKey) {
     throw new Error(`PushPlus access key request failed: ${data.msg || 'unknown error'}`);

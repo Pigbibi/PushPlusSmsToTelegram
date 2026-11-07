@@ -6,10 +6,10 @@
 // rendering have to agree across those ingresses, so they live here.
 
 const TELEGRAM_MAX_LENGTH = 3900;
+const PUSHPLUS_BASE_URL = 'https://www.pushplus.plus';
 
-// Field labels seen in the wild: PushPlus webhooks and hardware gateways label
-// the same value differently, and the SmsForwarder field names leak through
-// when a source forwards raw payload text.
+// The same value arrives under different labels depending on the sender, so
+// every known spelling is searched and the first match wins.
 const SENDER_LABELS = ['发件号码', '发信号码', '发送号码', '发送者', 'sender', 'from'];
 const SENT_AT_LABELS = ['发件时间', '发信时间', '发送时间', '时间', 'sentAt', 'time'];
 const METADATA_LABELS = [
@@ -311,8 +311,6 @@ function parsePushPlusUpdateTime(value) {
   return Number.isNaN(parsed) ? 0 : parsed;
 }
 
-export const PUSHPLUS_BASE_URL = 'https://www.pushplus.plus';
-
 function pushPlusUrl(baseUrl, pathname) {
   const base = String(baseUrl || PUSHPLUS_BASE_URL);
   return new URL(pathname, base.endsWith('/') ? base : `${base}/`);
@@ -363,6 +361,7 @@ export async function messageSourceIds(message, text) {
 }
 
 export {
+  PUSHPLUS_BASE_URL,
   buildTelegramText,
   extractSmsContent,
   findInterceptRule,
