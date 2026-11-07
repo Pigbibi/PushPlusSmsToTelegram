@@ -190,7 +190,7 @@ test('intercept coordinator keeps a preset active until every workflow lease end
     },
   });
   const put = leaseId => coordinator.fetch(new Request(
-    `https://intercept-leases.internal/leases/telecom-claim-silent/${leaseId}`,
+    `https://intercept-leases.internal/intercepts/leases/telecom-claim-silent/${leaseId}`,
     {
       method: 'PUT',
       headers: { 'content-type': 'application/json' },
@@ -198,7 +198,7 @@ test('intercept coordinator keeps a preset active until every workflow lease end
     },
   ));
   const remove = leaseId => coordinator.fetch(new Request(
-    `https://intercept-leases.internal/leases/telecom-claim-silent/${leaseId}`,
+    `https://intercept-leases.internal/intercepts/leases/telecom-claim-silent/${leaseId}`,
     { method: 'DELETE' },
   ));
   const activePresets = async () => {
