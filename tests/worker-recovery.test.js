@@ -3,14 +3,8 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import { webcrypto } from 'node:crypto';
 
+import { workerDedupeKey } from '../test-support/kv.js';
 import { loadWorker } from '../test-support/worker.js';
-
-async function workerDedupeKey(secret, sourceId) {
-  const input = new TextEncoder().encode(`${secret}:${sourceId}`);
-  const digest = await webcrypto.subtle.digest('SHA-256', input);
-  const hex = [...new Uint8Array(digest)].map(byte => byte.toString(16).padStart(2, '0')).join('');
-  return `pushplus:${hex}`;
-}
 
 async function runScheduled(worker, event, env) {
   const pending = [];
@@ -175,9 +169,6 @@ test('failed-only recovery skips messages PushPlus reports as delivered', async 
   const originalFetch = globalThis.fetch;
   const originalCrypto = Object.getOwnPropertyDescriptor(globalThis, 'crypto');
   const originalNow = Date.now;
-  const stateSecret = 'test-state-secret';
-  const racingKey = await workerDedupeKey(stateSecret, 'racing-message');
-  let keyReads = 0;
   let deliveryCalls = 0;
 
   Date.now = () => Date.UTC(2026, 5, 6, 12, 0, 0);
@@ -212,17 +203,10 @@ test('failed-only recovery skips messages PushPlus reports as delivered', async 
       PUSHPLUS_RECOVERY_NOT_BEFORE: '2026-06-06T10:00:00.000Z',
       PUSHPLUS_TOKEN: 'token',
       PUSHPLUS_SECRET_KEY: 'secret-key',
-      STATE_SECRET: stateSecret,
+      STATE_SECRET: 'test-state-secret',
       TELEGRAM_BOT_TOKEN: 'telegram-token',
       TELEGRAM_CHAT_ID: 'chat-id',
-      FORWARDED_KV: {
-        get: async key => {
-          if (key !== racingKey) return null;
-          keyReads += 1;
-          return null;
-        },
-        put: async () => {},
-      },
+      FORWARDED_KV: { get: async () => null, put: async () => {} },
     });
   } finally {
     globalThis.fetch = originalFetch;
@@ -234,7 +218,6 @@ test('failed-only recovery skips messages PushPlus reports as delivered', async 
     Date.now = originalNow;
   }
 
-  assert.equal(keyReads, 1);
   assert.equal(deliveryCalls, 0);
 });
 

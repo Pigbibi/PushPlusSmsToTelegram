@@ -34,35 +34,28 @@ async function setup(t) {
   return { module, env, kv, namespace, payload, send, records };
 }
 
-function waitForBothLookups(env) {
-  let release;
-  const bothLookedUp = new Promise(resolve => { release = resolve; });
-  const originalGet = env.FORWARDED_KV.get;
-  let reads = 0;
-  env.FORWARDED_KV.get = async key => {
-    const result = await originalGet(key);
-    reads += 1;
-    if (reads === 4) release();
-    return result;
-  };
-  return bothLookedUp;
+// The KV mirror always misses, so every copy reaches the delivery object on
+// its own: serialising concurrent copies is that object's job, not the
+// mirror's, and the test should not depend on which lookup wins the race.
+async function setupDuplicates(t) {
+  const context = await setup(t);
+  context.kv.get = async () => null;
+  return context;
 }
 
 test('one durable sender owns concurrent copies with the same source ID', async t => {
-  const { send, env } = await setup(t);
+  const { send } = await setupDuplicates(t);
   let calls = 0;
-  const bothLookedUp = waitForBothLookups(env);
-  globalThis.fetch = async () => { calls += 1; await bothLookedUp; return Response.json({ ok: true, result: { message_id: calls } }); };
+  globalThis.fetch = async () => { calls += 1; return Response.json({ ok: true, result: { message_id: calls } }); };
   const responses = await Promise.all([send(), send()]);
   assert.deepEqual(responses.map(response => response.status), [200, 200]);
   assert.equal(calls, 1);
 });
 
 test('direct and PushPlus copies serialize on their shared fingerprint', async t => {
-  const { module, env, payload, send } = await setup(t);
+  const { module, env, payload, send } = await setupDuplicates(t);
   let calls = 0;
-  const bothLookedUp = waitForBothLookups(env);
-  globalThis.fetch = async () => { calls += 1; await bothLookedUp; return Response.json({ ok: true, result: { message_id: calls } }); };
+  globalThis.fetch = async () => { calls += 1; return Response.json({ ok: true, result: { message_id: calls } }); };
   const pushplus = () => module.default.fetch(new Request('https://worker.example.invalid/pushplus/webhook', {
     method: 'POST', headers: { authorization: 'Bearer synthetic-placeholder', 'content-type': 'application/json' },
     body: JSON.stringify({ shortCode: 'synthetic-other-source', content: `${payload.content}\n发件号码: ${payload.sender}\n发件时间: ${payload.sentAt}\n#SMS` }),

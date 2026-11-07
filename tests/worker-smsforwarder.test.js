@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { webcrypto } from 'node:crypto';
 
+import { memoryKv } from '../test-support/kv.js';
 import { loadWorker } from '../test-support/worker.js';
 
 async function smsForwarderSignature(secret, timestamp) {
@@ -18,17 +19,6 @@ async function smsForwarderSignature(secret, timestamp) {
     new TextEncoder().encode(`${timestamp}\n${secret}`),
   );
   return encodeURIComponent(Buffer.from(signature).toString('base64'));
-}
-
-function memoryKv() {
-  const stored = new Map();
-  return {
-    stored,
-    binding: {
-      get: async key => stored.get(key) || null,
-      put: async (key, value) => stored.set(key, value),
-    },
-  };
 }
 
 function smsForwarderRequest(payload) {
