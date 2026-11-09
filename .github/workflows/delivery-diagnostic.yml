@@ -31,9 +31,8 @@ jobs:
       - name: Inspect recent PushPlus records without message content
         run: |
           node <<'NODE'
-          const { fetchRecentMessages } = require('./src/pushplus');
-
           async function main() {
+            const { fetchRecentMessages } = await import('./src/pushplus.js');
             const messages = await fetchRecentMessages({
               token: process.env.PUSHPLUS_TOKEN,
               secretKey: process.env.PUSHPLUS_SECRET_KEY,

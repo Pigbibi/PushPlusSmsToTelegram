@@ -16,4 +16,4 @@ async function sendTelegramMessage({ botToken, chatId, text }) {
   return data.result;
 }
 
-module.exports = { sendTelegramMessage };
+export { sendTelegramMessage };

@@ -3,6 +3,7 @@
   "version": "0.1.0",
   "description": "Forward PushPlus SMS messages to a Telegram bot.",
   "private": false,
+  "type": "module",
   "license": "MIT",
   "engines": {
     "node": ">=20"

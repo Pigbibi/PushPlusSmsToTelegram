@@ -1,6 +1,6 @@
-const crypto = require('node:crypto');
-const fs = require('node:fs');
-const path = require('node:path');
+import crypto from 'node:crypto';
+import fs from 'node:fs';
+import path from 'node:path';
 
 function loadState(file) {
   if (!fs.existsSync(file)) return { forwarded: [] };
@@ -39,7 +39,7 @@ function markForwarded(state, id) {
   }
 }
 
-module.exports = {
+export {
   hasForwarded,
   loadState,
   markForwarded,

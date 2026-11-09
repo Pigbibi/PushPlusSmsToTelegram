@@ -1,6 +1,6 @@
-const test = require('node:test');
-const assert = require('node:assert/strict');
-const { sendTelegramMessage } = require('../src/telegram');
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import { sendTelegramMessage } from '../src/telegram.js';
 
 const input = { botToken: 'synthetic-token', chatId: 'synthetic-chat', text: 'synthetic message' };
 

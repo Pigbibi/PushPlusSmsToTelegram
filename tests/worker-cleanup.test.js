@@ -1,17 +1,9 @@
-const test = require('node:test');
-const assert = require('node:assert/strict');
-const fs = require('node:fs');
-const path = require('node:path');
-const { webcrypto } = require('node:crypto');
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import { webcrypto } from 'node:crypto';
 
-const { loadWorker } = require('../test-support/worker');
-
-async function workerDedupeKey(secret, sourceId) {
-  const input = new TextEncoder().encode(`${secret}:${sourceId}`);
-  const digest = await webcrypto.subtle.digest('SHA-256', input);
-  const hex = [...new Uint8Array(digest)].map(byte => byte.toString(16).padStart(2, '0')).join('');
-  return `pushplus:${hex}`;
-}
+import { workerDedupeKey } from '../test-support/kv.js';
+import { loadWorker } from '../test-support/worker.js';
 
 test('scheduled cleanup deletes only old forwarded PushPlus messages', async () => {
   const { default: worker } = await loadWorker();

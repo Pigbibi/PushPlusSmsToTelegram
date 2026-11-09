@@ -1,10 +1,9 @@
-const test = require('node:test');
-const assert = require('node:assert/strict');
-const fs = require('node:fs');
-const path = require('node:path');
-const { webcrypto } = require('node:crypto');
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import { webcrypto } from 'node:crypto';
 
-const { loadWorker } = require('../test-support/worker');
+import { memoryKv } from '../test-support/kv.js';
+import { loadWorker } from '../test-support/worker.js';
 
 async function smsForwarderSignature(secret, timestamp) {
   const key = await webcrypto.subtle.importKey(
@@ -20,17 +19,6 @@ async function smsForwarderSignature(secret, timestamp) {
     new TextEncoder().encode(`${timestamp}\n${secret}`),
   );
   return encodeURIComponent(Buffer.from(signature).toString('base64'));
-}
-
-function memoryKv() {
-  const stored = new Map();
-  return {
-    stored,
-    binding: {
-      get: async key => stored.get(key) || null,
-      put: async (key, value) => stored.set(key, value),
-    },
-  };
 }
 
 function smsForwarderRequest(payload) {
