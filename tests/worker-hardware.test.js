@@ -1,21 +1,9 @@
-const test = require('node:test');
-const assert = require('node:assert/strict');
-const fs = require('node:fs');
-const path = require('node:path');
-const { webcrypto } = require('node:crypto');
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import { webcrypto } from 'node:crypto';
 
-const { loadWorker } = require('../test-support/worker');
-
-function memoryKv() {
-  const stored = new Map();
-  return {
-    stored,
-    binding: {
-      get: async key => stored.get(key) || null,
-      put: async (key, value) => stored.set(key, value),
-    },
-  };
-}
+import { memoryKv } from '../test-support/kv.js';
+import { loadWorker } from '../test-support/worker.js';
 
 function hardwareRequest(token, payload) {
   return new Request(`https://worker.example.test/device/webhook/${token}`, {

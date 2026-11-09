@@ -1,9 +1,15 @@
 #!/usr/bin/env node
-const { fetchRecentMessages } = require('./pushplus');
-const { loadState, saveState, messageId, hasForwarded, markForwarded } = require('./state');
-const { findInterceptRule, interceptShouldSilence, loadInterceptRules } = require('./interceptors');
-const { buildTelegramText, splitTelegramText, parseSmsFields } = require('./text');
-const { sendTelegramMessage } = require('./telegram');
+import { fetchRecentMessages } from './pushplus.js';
+import { loadState, saveState, messageId, hasForwarded, markForwarded } from './state.js';
+import {
+  buildTelegramText,
+  findInterceptRule,
+  interceptShouldSilence,
+  loadInterceptRules,
+  parseSmsFields,
+  splitTelegramText,
+} from './pipeline.js';
+import { sendTelegramMessage } from './telegram.js';
 
 function env(name, fallback = '') {
   return process.env[name] || fallback;

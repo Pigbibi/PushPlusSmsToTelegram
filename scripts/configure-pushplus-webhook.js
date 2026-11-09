@@ -1,5 +1,6 @@
 #!/usr/bin/env node
-const DEFAULT_BASE_URL = 'https://www.pushplus.plus';
+import { PUSHPLUS_BASE_URL, pushPlusAccessKeyRequest, pushPlusUrl } from '../src/pipeline.js';
+
 const DEFAULT_WEBHOOK_CODE = 'sms2telegram';
 const DEFAULT_WEBHOOK_NAME = '短信转发到Telegram';
 const DEFAULT_WEBHOOK_BODY = '标题：{title}\n链接：{url}\n\n{content}';
@@ -12,11 +13,6 @@ function requireEnv(name) {
   const value = env(name);
   if (!value) throw new Error(`Missing required env: ${name}`);
   return value;
-}
-
-function pushPlusUrl(baseUrl, pathname) {
-  const base = baseUrl.endsWith('/') ? baseUrl : `${baseUrl}/`;
-  return new URL(pathname, base);
 }
 
 function redactUrl(value) {
@@ -37,11 +33,11 @@ async function requestJson(url, options = {}) {
 }
 
 async function getAccessKey(config) {
-  const data = await requestJson(pushPlusUrl(config.baseUrl, '/api/common/openApi/getAccessKey'), {
-    method: 'POST',
-    headers: { 'content-type': 'application/json', accept: 'application/json' },
-    body: JSON.stringify({ token: config.token, secretKey: config.secretKey }),
+  const request = pushPlusAccessKeyRequest(config.baseUrl, {
+    token: config.token,
+    secretKey: config.secretKey,
   });
+  const data = await requestJson(request.url, request.options);
   if (data.code !== 200 || !data?.data?.accessKey) {
     throw new Error(`PushPlus access key request failed: ${data.msg || 'unknown error'}`);
   }
@@ -118,7 +114,7 @@ async function main() {
     token: requireEnv('PUSHPLUS_TOKEN'),
     secretKey: requireEnv('PUSHPLUS_SECRET_KEY'),
     webhookUrl: requireEnv('PUSHPLUS_WEBHOOK_URL'),
-    baseUrl: env('PUSHPLUS_BASE_URL', DEFAULT_BASE_URL),
+    baseUrl: env('PUSHPLUS_BASE_URL', PUSHPLUS_BASE_URL),
     webhookCode: env('PUSHPLUS_WEBHOOK_CODE', DEFAULT_WEBHOOK_CODE),
     webhookName: env('PUSHPLUS_WEBHOOK_NAME', DEFAULT_WEBHOOK_NAME),
     webhookBody: env('PUSHPLUS_WEBHOOK_BODY', DEFAULT_WEBHOOK_BODY),

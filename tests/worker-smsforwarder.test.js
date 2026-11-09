@@ -1,10 +1,9 @@
-const test = require('node:test');
-const assert = require('node:assert/strict');
-const fs = require('node:fs');
-const path = require('node:path');
-const { webcrypto } = require('node:crypto');
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import { webcrypto } from 'node:crypto';
 
-const { loadWorker } = require('../test-support/worker');
+import { memoryKv } from '../test-support/kv.js';
+import { loadWorker } from '../test-support/worker.js';
 
 async function smsForwarderSignature(secret, timestamp) {
   const key = await webcrypto.subtle.importKey(
@@ -20,17 +19,6 @@ async function smsForwarderSignature(secret, timestamp) {
     new TextEncoder().encode(`${timestamp}\n${secret}`),
   );
   return encodeURIComponent(Buffer.from(signature).toString('base64'));
-}
-
-function memoryKv() {
-  const stored = new Map();
-  return {
-    stored,
-    binding: {
-      get: async key => stored.get(key) || null,
-      put: async (key, value) => stored.set(key, value),
-    },
-  };
 }
 
 function smsForwarderRequest(payload) {
@@ -267,4 +255,28 @@ test('Telegram delivery retries transient failures but does not mark permanent f
       delete globalThis.crypto;
     }
   }
+});
+
+test('signature-key reuse preserves rotation, signature verification and timestamp checks', async () => {
+  const {default:worker}=await loadWorker();
+  const proto=Object.getPrototypeOf(webcrypto.subtle), original=proto.importKey;
+  let imports=0;
+  proto.importKey=function(...args){if(args[4]?.includes('verify'))imports++;return original.apply(this,args);};
+  const oldCrypto=Object.getOwnPropertyDescriptor(globalThis,'crypto');
+  Object.defineProperty(globalThis,'crypto',{value:webcrypto,configurable:true});
+  const stamp=Date.now(), secret='synthetic-signing-a';
+  const signature=await smsForwarderSignature(secret,stamp);
+  const request=(sign,timestamp=stamp)=>smsForwarderRequest({sourceId:'x'.repeat(257),timestamp,sign});
+  try {
+    const env={SMSFORWARDER_WEBHOOK_SECRET:secret};
+    for(let i=0;i<20;i++)assert.equal((await worker.fetch(request(signature),env,{})).status,400);
+    assert.equal(imports,1,'20 signature checks import once');
+    const changed={SMSFORWARDER_WEBHOOK_SECRET:'synthetic-signing-b'};
+    assert.equal((await worker.fetch(request(signature),changed,{})).status,401);
+    assert.equal(imports,2,'key changes take effect immediately');
+    const rotated=await smsForwarderSignature(changed.SMSFORWARDER_WEBHOOK_SECRET,stamp);
+    assert.equal((await worker.fetch(request(rotated),changed,{})).status,400);
+    assert.equal((await worker.fetch(request(rotated,stamp-86400000),changed,{})).status,401);
+    assert.equal(imports,2,'stale requests are rejected before key import');
+  } finally {proto.importKey=original;if(oldCrypto)Object.defineProperty(globalThis,'crypto',oldCrypto);else delete globalThis.crypto;}
 });

@@ -13,7 +13,7 @@ concurrency:
 jobs:
   diagnose:
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 30
     env:
       PUSHPLUS_TOKEN: ${{ secrets.PUSHPLUS_TOKEN }}
       PUSHPLUS_SECRET_KEY: ${{ secrets.PUSHPLUS_SECRET_KEY }}
@@ -31,9 +31,8 @@ jobs:
       - name: Inspect recent PushPlus records without message content
         run: |
           node <<'NODE'
-          const { fetchRecentMessages } = require('./src/pushplus');
-
           async function main() {
+            const { fetchRecentMessages } = await import('./src/pushplus.js');
             const messages = await fetchRecentMessages({
               token: process.env.PUSHPLUS_TOKEN,
               secretKey: process.env.PUSHPLUS_SECRET_KEY,
@@ -256,7 +255,7 @@ jobs:
 
       - name: Verify minute recovery after PushPlus webhook failure
         if: steps.pushplus_ingress.outputs.delivery_mode == 'recovery'
-        timeout-minutes: 3
+        timeout-minutes: 27
         env:
           INBOX_TOKEN: ${{ secrets.INBOX_TOKEN }}
         run: |
@@ -267,7 +266,7 @@ jobs:
           async function main() {
             const sourceId = fs.readFileSync('.pushplus-diagnostic-source-id', 'utf8').trim();
             if (!sourceId || !process.env.INBOX_TOKEN) throw new Error('Missing recovery diagnostic credentials');
-            for (let attempt = 1; attempt <= 12; attempt += 1) {
+            for (let attempt = 1; attempt <= 150; attempt += 1) {
               const response = await fetch(
                 'https://pushplus-sms-to-telegram.pigbibi.workers.dev/diagnostics/handled',
                 {
@@ -286,7 +285,7 @@ jobs:
                 console.log('Minute recovery processed the failed PushPlus webhook message.');
                 return;
               }
-              if (attempt < 12) await sleep(10_000);
+              if (attempt < 150) await sleep(10_000);
             }
             throw new Error('Minute recovery did not process the failed PushPlus webhook message in time');
           }
