@@ -1,10 +1,12 @@
-const test = require('node:test');
-const assert = require('node:assert/strict');
-const fs = require('node:fs');
-const os = require('node:os');
-const path = require('node:path');
-const { syncState, validateState } = require('../scripts/private-state');
-const { saveState } = require('../src/state');
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import { spawnSync } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
+import { syncState, validateState } from '../scripts/private-state.js';
+import { saveState } from '../src/state.js';
 
 function fixture(t) {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'private-forward-state-'));
@@ -71,4 +73,15 @@ test('report serialization has no secrets', t => {
   }
   check(JSON.parse(serialized));
   assert.deepEqual(validateState(serialized).forwarded.map(i => i.id), ['a'.repeat(64)]);
+});
+
+test('the helper runs as an ESM CLI and fails closed without configuration', () => {
+  const script = fileURLToPath(new URL('../scripts/private-state.js', import.meta.url));
+  const result = spawnSync(process.execPath, [script, 'restore'], {
+    encoding: 'utf8',
+    env: { ...process.env, PRIVATE_STATE_BUCKET: '' },
+  });
+  assert.equal(result.status, 1);
+  assert.match(result.stderr, /forwarding stopped/);
+  assert.doesNotMatch(result.stderr, /require is not defined/);
 });

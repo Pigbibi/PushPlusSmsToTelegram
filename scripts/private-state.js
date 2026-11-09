@@ -1,6 +1,7 @@
-const fs = require('node:fs');
-const path = require('node:path');
-const { execFileSync } = require('node:child_process');
+import fs from 'node:fs';
+import path from 'node:path';
+import { execFileSync } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
 
 function validateState(text) {
   const value = JSON.parse(text);
@@ -38,10 +39,22 @@ function syncState(mode, { env = process.env, runStorage = args => execFileSync(
   } else throw new Error('Use restore or persist.');
 }
 
-if (require.main === module) {
+// This package is ESM ("type": "module"), so require.main === module is not
+// available. Compare real paths so symlinked working directories still match.
+function invokedDirectly() {
+  if (!process.argv[1]) return false;
+  try {
+    return fs.realpathSync(process.argv[1]) === fs.realpathSync(fileURLToPath(import.meta.url));
+  } catch {
+    return false;
+  }
+}
+
+if (invokedDirectly()) {
   try { syncState(process.argv[2]); } catch {
     console.error('Private state unavailable or invalid; forwarding stopped.');
     process.exitCode = 1;
   }
 }
-module.exports = { syncState, validateState };
+
+export { syncState, validateState };
