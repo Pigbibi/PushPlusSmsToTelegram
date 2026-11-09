@@ -215,3 +215,24 @@ according to their own services.
 
 Avoid logging request bodies. Rotate every affected credential if a message,
 token, chat ID, or real endpoint is exposed publicly.
+
+Private workflow state uses `PRIVATE_STATE_BUCKET` and the object
+`gs://<bucket>/PushPlusSmsToTelegram/forwarded.json`. Configure
+`GCP_WORKLOAD_IDENTITY_PROVIDER` and `GCP_SERVICE_ACCOUNT` as repository variables
+for an existing identity with access to the existing private bucket.
+
+This change
+creates no identity, IAM binding, repository variable or bucket.
+
+Before enabling,
+seed the object from the prior deduplication state; only a verified first run may
+start with `{"forwarded":[]}`.
+
+Missing objects, invalid state and failed reads stop
+forwarding. Writes use the restored object generation to reject concurrent changes.
+Do not give this state a 30-day expiration: forgetting IDs permits duplicate SMS
+forwarding..
+
+No runtime state is committed to the public `state` branch. Successful
+runs record only the last success time in the public job summary. Old public history
+is unchanged.
