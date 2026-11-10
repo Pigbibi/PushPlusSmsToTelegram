@@ -234,11 +234,11 @@ async function activeInterceptLeasePresets(env) {
 
 async function findEffectiveInterceptRule(message, env) {
   const staticRule = findInterceptRule(message, loadInterceptRules(env));
-  if (staticRule) return staticRule;
+  if (staticRule) return { rule: staticRule, leased: false, presets: [] };
   const leasedPresets = await activeInterceptLeasePresets(env);
-  if (!leasedPresets.length) return null;
-  const leasedRules = leasedPresets.flatMap(preset => interceptPresetRules(preset, env));
-  return findInterceptRule(message, leasedRules);
+  if (!leasedPresets.length) return { rule: null, leased: false, presets: [] };
+  const leasedRules = leasedPresets.flatMap(preset => interceptPresetRules(preset, env, { leased: true }));
+  return { rule: findInterceptRule(message, leasedRules), leased: true, presets: leasedPresets };
 }
 
 async function dedupeKey(sourceId, env) {
@@ -842,15 +842,33 @@ async function forwardPushPlusMessage(env, message) {
     await putDedupeKeys(keys, `duplicate:${String(existingValue).slice(0, 128)}`, env);
     return 'duplicates';
   }
-  const interceptRule = await findEffectiveInterceptRule({ ...message, text }, env);
+  const intercept = await findEffectiveInterceptRule({ ...message, text }, env);
+  const interceptRule = intercept.rule;
   if (interceptRule) {
     if (interceptShouldStore(interceptRule)) {
       await storeInboxMessage(env, { ...message, text });
     }
     if (interceptShouldSilence(interceptRule)) {
       await putDedupeKeys(keys, `intercept:${interceptRule.name || 'silence'}`, env);
+      console.log(JSON.stringify({
+        event: 'intercept_decision',
+        decision: 'silenced',
+        rule: interceptRule.name || 'silence',
+        leased: intercept.leased,
+        presets: intercept.presets,
+      }));
       return 'intercepted';
     }
+  }
+  if (intercept.leased) {
+    // A held lease that matches nothing is the failure mode that lets an OTP
+    // reach Telegram, so record it instead of failing silently.
+    console.warn(JSON.stringify({
+      event: 'intercept_decision',
+      decision: 'no_rule_match_while_leased',
+      leased: true,
+      presets: intercept.presets,
+    }));
   }
 
   if (env.MESSAGE_TITLE_KEYWORD && !String(message.title || '').includes(env.MESSAGE_TITLE_KEYWORD)) {

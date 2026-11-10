@@ -187,6 +187,14 @@ another workflow's lease. TTL is clamped to two hours and protects against
 cancelled workflows whose cleanup does not run. A preset remains active while
 any of its leases exists.
 
+A lease is the operator's explicit statement that the matching SMS is expected
+within that window, so a leased `guangdong-sso-auth` matches on the SMS text
+only (`验证码` plus one SSO marker). The optional `GUANGDONG_SMS_SENDER` guard
+applies to the statically configured preset, not to leases: gateway sender IDs
+change per carrier and a stale value would otherwise let the OTP reach Telegram.
+Outside any lease the workflow rule does not apply at all, so other messages are
+forwarded exactly as before.
+
 Lease writes accept only a bearer token; query-string authentication is not
 accepted. Reading `/messages` keeps its existing authentication behavior.
 
