@@ -222,14 +222,18 @@ function telecomClaimPresetRules(env) {
   ];
 }
 
-function guangdongSsoPresetRules(env) {
+function guangdongSsoPresetRules(env, { leased = false } = {}) {
   const rule = {
     name: 'guangdong-sso-auth',
     action: 'silence-store',
     textIncludesAll: ['验证码'],
     textIncludesAny: ['统一身份认证', '广东政务服务', '粤省事', '政务服务网', '深圳社保局'],
   };
-  if (env.GUANGDONG_SMS_SENDER) rule.senderIncludes = env.GUANGDONG_SMS_SENDER;
+  // A workflow lease is the operator's explicit "an SSO OTP is expected right
+  // now" consent, so the leased window must not depend on the gateway's sender
+  // string, which changes per carrier/gateway and silently let codes through.
+  // Text evidence above stays mandatory either way.
+  if (env.GUANGDONG_SMS_SENDER && !leased) rule.senderIncludes = env.GUANGDONG_SMS_SENDER;
   if (env.GUANGDONG_SMS_KEYWORD) rule.textIncludesAny = [env.GUANGDONG_SMS_KEYWORD];
   return [rule];
 }
@@ -245,9 +249,9 @@ export const WORKFLOW_LEASED_PRESETS = new Set(
   Object.entries(PRESETS).filter(([, preset]) => preset.leaseable).map(([name]) => name),
 );
 
-function interceptPresetRules(preset, env) {
+function interceptPresetRules(preset, env, { leased = false } = {}) {
   const entry = PRESETS[preset];
-  return entry ? entry.build(env) : [];
+  return entry ? entry.build(env, { leased }) : [];
 }
 
 function splitCsv(value) {

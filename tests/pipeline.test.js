@@ -183,3 +183,31 @@ test('parses numeric PushPlus timestamps in seconds and milliseconds', () => {
   assert.equal(parsePushPlusUpdateTime(1_780_295_445), 1_780_295_445_000);
   assert.equal(parsePushPlusUpdateTime(1_780_295_445_000), 1_780_295_445_000);
 });
+
+test('guangdong preset ignores the sender filter inside a workflow lease', async () => {
+  const { interceptPresetRules } = await import('../src/pipeline.js');
+  const env = { GUANGDONG_SMS_SENDER: '10086' };
+  const message = {
+    text: '【政务短信平台】本次短信验证码为243073，有效期5分钟，请勿泄露。省统一身份认证平台\n发件号码: 10686353020',
+  };
+
+  // Static configuration keeps the sender guard.
+  const staticRules = interceptPresetRules('guangdong-sso-auth', env);
+  assert.equal(findInterceptRule(message, staticRules), null);
+
+  // A held lease only needs the text evidence, so a gateway that reports a
+  // different sender cannot let the OTP through.
+  const leasedRules = interceptPresetRules('guangdong-sso-auth', env, { leased: true });
+  const matched = findInterceptRule(message, leasedRules);
+  assert.equal(matched?.name, 'guangdong-sso-auth');
+  assert.equal(interceptShouldSilence(matched), true);
+  assert.equal(interceptShouldStore(matched), true);
+});
+
+test('leased guangdong preset still requires SSO text evidence', async () => {
+  const { interceptPresetRules } = await import('../src/pipeline.js');
+  const leasedRules = interceptPresetRules('guangdong-sso-auth', {}, { leased: true });
+  const unrelated = { text: '【银行】您的验证码为 889900，请勿泄露。\n发件号码: 95588' };
+  assert.equal(findInterceptRule(unrelated, leasedRules), null);
+  assert.equal(findInterceptRule({ text: '今天天气不错' }, leasedRules), null);
+});

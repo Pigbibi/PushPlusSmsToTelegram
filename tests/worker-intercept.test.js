@@ -217,3 +217,87 @@ test('intercept coordinator keeps a preset active until every workflow lease end
   assert.deepEqual(await activePresets(), []);
   assert.equal(stored.has('lease:telecom-claim-silent:expired'), false);
 });
+
+test('a held lease silences an SSO OTP even when the configured sender differs', async () => {
+  const { default: worker, InterceptLeaseCoordinator } = await loadWorker();
+  const originalFetch = globalThis.fetch;
+  const originalCrypto = Object.getOwnPropertyDescriptor(globalThis, 'crypto');
+  const stored = new Map();
+  const leaseStorage = new Map();
+  let telegramCalls = 0;
+  Object.defineProperty(globalThis, 'crypto', { value: webcrypto, configurable: true });
+  globalThis.fetch = async url => {
+    assert.equal(new URL(String(url)).hostname, 'api.telegram.org');
+    telegramCalls += 1;
+    return Response.json({ ok: true, result: { message_id: 1 } });
+  };
+  const deliveries = {};
+  const coordinator = new InterceptLeaseCoordinator({
+    storage: {
+      list: async ({ prefix }) => new Map(
+        [...leaseStorage].filter(([key]) => key.startsWith(prefix)),
+      ),
+      get: async key => leaseStorage.get(key),
+      put: async (key, value) => leaseStorage.set(key, value),
+      delete: async keyOrKeys => {
+        for (const key of Array.isArray(keyOrKeys) ? keyOrKeys : [keyOrKeys]) leaseStorage.delete(key);
+      },
+    },
+  });
+  const env = {
+    CALLBACK_TOKEN: 'callback-token',
+    INBOX_TOKEN: 'inbox-token',
+    STATE_SECRET: 'state-secret',
+    TELEGRAM_BOT_TOKEN: 'telegram-token',
+    TELEGRAM_CHAT_ID: 'chat-id',
+    // A stale sender guard must not defeat the lease.
+    GUANGDONG_SMS_SENDER: '10086',
+    FORWARDED_KV: {
+      get: async key => stored.get(key) || null,
+      put: async (key, value) => stored.set(key, value),
+    },
+    INTERCEPT_LEASES: {
+      getByName: name => name === 'sms-delivery' ? deliveries.getByName(name) : ({
+        fetch: request => coordinator.fetch(
+          typeof request === 'string' ? new Request(request) : request,
+        ),
+      }),
+    },
+  };
+  Object.assign(deliveries, memoryDurableObjects(InterceptLeaseCoordinator, env));
+
+  try {
+    await worker.fetch(new Request(
+      'https://worker.example.test/intercepts/leases/guangdong-sso-auth/run-456',
+      {
+        method: 'PUT',
+        headers: { authorization: 'Bearer inbox-token', 'content-type': 'application/json' },
+        body: JSON.stringify({ ttlSeconds: 600 }),
+      },
+    ), env, {});
+
+    const response = await worker.fetch(new Request(
+      'https://worker.example.test/pushplus/webhook/callback-token',
+      {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          shortCode: 'leased-mismatched-sender',
+          title: '短信转发',
+          content: '【政务短信平台】本次短信验证码为243073，有效期5分钟，请勿泄露。省统一身份认证平台\n发件号码: 10686353020',
+        }),
+      },
+    ), env, {});
+    assert.equal(response.status, 200);
+  } finally {
+    globalThis.fetch = originalFetch;
+    if (originalCrypto) {
+      Object.defineProperty(globalThis, 'crypto', originalCrypto);
+    } else {
+      delete globalThis.crypto;
+    }
+  }
+
+  assert.equal(telegramCalls, 0);
+  assert.equal([...stored.values()].some(value => value === 'intercept:guangdong-sso-auth'), true);
+});
