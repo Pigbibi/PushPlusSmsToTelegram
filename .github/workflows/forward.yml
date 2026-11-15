@@ -70,7 +70,7 @@ jobs:
         run: npm run forward
 
       - name: Scan state before storage
-        uses: QuantStrategyLab/.github/actions/scan-before-publish@0da4da68433b803cda17d3f84e29875a94a32273
+        uses: QuantStrategyLab/.github/actions/scan-before-publish@34774d70ea239dd88ee92992c2bf87c8f86bac5f
         with:
           path: .state
 
