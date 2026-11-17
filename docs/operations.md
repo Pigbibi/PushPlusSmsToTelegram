@@ -61,11 +61,12 @@ keeps the bundled Pages relay as the default.
 The scheduled `delivery-monitor.yml` workflow runs an hourly quiet probe. It
 checks the Worker health endpoint, sends a filtered request through the VPS
 relay, confirms a default-channel PushPlus message reaches final status 2, and
-asks the Worker to call Telegram `getChat` without posting a message. Telegram
-credentials remain only in the Worker; the monitor authenticates with the
-existing inbox bearer token. The monitor title and body
-do not match production SMS filters, so successful runs create no Telegram
-notification. A failed run remains visible in GitHub Actions.
+asks the Worker to call Telegram `getChat` without posting a message.
+
+Telegram credentials remain only in the Worker; the monitor authenticates with
+the existing inbox bearer token. The monitor title and body do not match
+production SMS filters, so successful runs create no Telegram notification. A
+failed run remains visible in GitHub Actions.
 
 ## PushPlus webhook helper
 
@@ -98,10 +99,11 @@ filtering and delivery. Prefer the custom webhook path when the full
 
 For SmsForwarder 3.2.0 or newer, configure the signed direct Worker webhook as
 the first sender and PushPlus as the second sender with "stop after success".
-Set three request retries on the phone. This removes PushPlus from the normal
-critical path while preserving it as an independently routed fallback through
-the VPS. The Worker still applies workflow-scoped intercept leases to both
-paths, so unrelated SMS continue to reach Telegram.
+Set three request retries on the phone.
+
+This removes PushPlus from the normal critical path while preserving it as an
+independently routed fallback through the VPS. The Worker still applies
+workflow-scoped intercept leases to both paths, so unrelated SMS reach Telegram.
 
 ## Manual backfill
 
@@ -147,10 +149,11 @@ the Worker has valid PushPlus, Telegram, state, and KV configuration.
 The log reports scanned candidates and separate forwarded, intercepted,
 filtered, duplicate, empty, upstream-delivered, upstream-pending, and failed
 counts. Disable recovery first when investigating unexpected selection or
-duplicate delivery; existing realtime webhooks continue to work. Set
-`PUSHPLUS_RECOVERY_ALERT_ENABLED=false` when operators prefer log-only recovery
-reporting. Do not use this job as the primary delivery path: PushPlus can omit
-connection-timeout failures from the Open API message list.
+duplicate delivery; existing realtime webhooks continue to work.
+
+Set `PUSHPLUS_RECOVERY_ALERT_ENABLED=false` when operators prefer log-only
+recovery reporting. Do not use this job as the primary delivery path: PushPlus
+can omit connection-timeout failures from the Open API message list.
 
 The production diagnostic uses the bearer-protected
 `POST /diagnostics/handled` endpoint to verify a specific synthetic message's
@@ -180,10 +183,11 @@ the Worker origin, PushPlus credentials, Telegram delivery, or KV access.
 
 Workflow consumers that need to hide OTP notifications temporarily should
 acquire an intercept lease immediately before the SMS-producing step and
-release it with an `always()` cleanup step. Use a unique lease ID derived from
-the workflow run ID and attempt. Do not leave the equivalent preset in
-`SMS_INTERCEPT_PRESETS` or `SMS_INTERCEPT_RULES`, because static rules continue
-silencing messages after the consumer workflow finishes.
+release it with an `always()` cleanup step.
+
+Use a unique lease ID derived from the workflow run ID and attempt. Do not leave
+the equivalent preset in `SMS_INTERCEPT_PRESETS` or `SMS_INTERCEPT_RULES`,
+because static rules continue silencing messages after the workflow finishes.
 
 ## Data handling
 
@@ -195,6 +199,7 @@ your deployment configuration; a KV-only deployment cannot forward messages.
 The coordinator transactionally claims all salted message/fingerprint keys
 before sending. It stores only state, confirmed chunk counts, and completion
 expiry metadata, never SMS text, tokens, chat IDs or provider error messages.
+
 Completed records suppress resending even when the subsequent KV mirror write
 fails. Completed claims have the same 180-day logical deduplication period;
 expired rows are replaced on reuse, not swept by a new automatic cleanup job.
@@ -202,11 +207,13 @@ expired rows are replaced on reuse, not swept by a new automatic cleanup job.
 A timeout, malformed response, interrupted object, partial multipart send or
 failed receipt write retains a no-resend reservation. These outcomes require
 manual reconciliation against the Telegram destination before any separately
-authorized reset/replay. Do not clear the object or rotate `STATE_SECRET` as a
-retry workaround. Unknown records do not expire automatically; assess storage
-retention separately without erasing unresolved evidence. This does not promise
-end-to-end exactly-once delivery. Only explicit negative Telegram API responses
-are eligible for the existing bounded retry policy.
+authorized reset/replay.
+
+Do not clear the object or rotate `STATE_SECRET` as a retry workaround. Unknown
+records do not expire automatically; assess storage retention separately without
+erasing unresolved evidence. Only explicit negative Telegram responses retry
+within the bounded policy; this does not promise end-to-end exactly-once
+delivery.
 
 Normal forwarding stores salted deduplication keys rather than SMS bodies.
 Rules with storage enabled put selected bodies in KV for six hours. Cloudflare,
@@ -221,17 +228,13 @@ Private workflow state uses `PRIVATE_STATE_BUCKET` and the object
 `GCP_WORKLOAD_IDENTITY_PROVIDER` and `GCP_SERVICE_ACCOUNT` as repository variables
 for an existing identity with access to the existing private bucket.
 
-This change
-creates no identity, IAM binding, repository variable or bucket.
+No new identity, IAM binding, repository variable, or bucket is created
+automatically. Before enabling, seed the object from the prior deduplication
+state; only a verified first run may start with `{"forwarded":[]}`.
 
-Before enabling,
-seed the object from the prior deduplication state; only a verified first run may
-start with `{"forwarded":[]}`.
-
-Missing objects, invalid state and failed reads stop
-forwarding. Writes use the restored object generation to reject concurrent changes.
-Do not give this state a 30-day expiration: forgetting IDs permits duplicate SMS
-forwarding..
+Missing objects, invalid state, and failed reads stop forwarding. Writes use the
+restored object generation to reject concurrent changes. Do not give this state
+a 30-day expiration: forgetting IDs permits duplicate SMS forwarding.
 
 No runtime state is committed to the public `state` branch. Successful
 runs record only the last success time in the public job summary. Old public history
