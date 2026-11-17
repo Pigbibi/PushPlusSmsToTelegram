@@ -24,7 +24,7 @@ MESSAGE_TITLE_KEYWORD = "短信转发"
 # PUSHPLUS_RECOVERY_PAGE_SIZE = "50"
 # PUSHPLUS_RECOVERY_MAX_PAGES = "2"
 # PUSHPLUS_RECOVERY_MAX_MESSAGES = "20"
-# PUSHPLUS_RECOVERY_TITLE_KEYWORD = "SMS Forward"
+# PUSHPLUS_RECOVERY_TITLE_KEYWORD defaults to MESSAGE_TITLE_KEYWORD when omitted.
 # PUSHPLUS_RECOVERY_ALERT_ENABLED = "true"
 
 # Optional PushPlus record cleanup. Cleanup is disabled unless explicitly enabled.
@@ -33,7 +33,7 @@ MESSAGE_TITLE_KEYWORD = "短信转发"
 # PUSHPLUS_CLEANUP_PAGE_SIZE = "50"
 # PUSHPLUS_CLEANUP_MAX_PAGES = "10"
 # PUSHPLUS_CLEANUP_MAX_DELETES = "20"
-# PUSHPLUS_CLEANUP_TITLE_KEYWORD = "SMS Forward"
+# PUSHPLUS_CLEANUP_TITLE_KEYWORD defaults to MESSAGE_TITLE_KEYWORD when omitted.
 # PUSHPLUS_CLEANUP_REQUIRE_FORWARDED = "true"
 
 # Optional long-lived intercept rules. Workflow automation should prefer bounded leases.
