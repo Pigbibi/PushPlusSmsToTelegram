@@ -73,10 +73,11 @@ Recommended SmsForwarder JSON parameters:
 Set the channel method to `POST`, header `Content-Type: application/json`,
 success keyword `success`, and the channel secret to the exact value stored as
 `SMSFORWARDER_WEBHOOK_SECRET`. Put this channel before PushPlus and select
-SmsForwarder's "stop after success" execution logic. A generated `sourceId`
-and the server-side SMS fingerprint make phone retries idempotent and suppress
-the later PushPlus copy when both routes carry the same sender, receive time,
-and SMS content.
+SmsForwarder's "stop after success" execution logic.
+
+A generated `sourceId` and the server-side SMS fingerprint make phone retries
+idempotent and suppress the later PushPlus copy when both routes carry the same
+sender, receive time, and SMS content.
 
 | Variable | Default | Purpose |
 | --- | --- | --- |
@@ -182,18 +183,20 @@ Authorization: Bearer <INBOX_TOKEN>
 Supported presets are `telecom-claim-silent` and `guangdong-sso-auth`. Lease
 IDs may contain letters, numbers, dots, underscores, and hyphens. Each lease is
 stored independently in a strongly consistent Durable Object, so activation is
-visible before the acquire request returns and one workflow cannot release
-another workflow's lease. TTL is clamped to two hours and protects against
-cancelled workflows whose cleanup does not run. A preset remains active while
-any of its leases exists.
+visible before the acquire request returns.
+
+One workflow cannot release another workflow's lease. TTL is clamped to two hours
+and protects against cancelled workflows whose cleanup does not run. A preset
+remains active while any of its leases exists.
 
 A lease is the operator's explicit statement that the matching SMS is expected
 within that window, so a leased `guangdong-sso-auth` matches on the SMS text
-only (`验证码` plus one SSO marker). The optional `GUANGDONG_SMS_SENDER` guard
-applies to the statically configured preset, not to leases: gateway sender IDs
-change per carrier and a stale value would otherwise let the OTP reach Telegram.
-Outside any lease the workflow rule does not apply at all, so other messages are
-forwarded exactly as before.
+only (`验证码` plus one SSO marker).
+
+The optional `GUANGDONG_SMS_SENDER` guard applies to the statically configured
+preset, not to leases: gateway sender IDs change per carrier and a stale value
+would otherwise let the OTP reach Telegram. Outside any lease the rule does not
+apply, so other messages forward normally.
 
 Lease writes accept only a bearer token; query-string authentication is not
 accepted. Reading `/messages` keeps its existing authentication behavior.
@@ -216,10 +219,11 @@ token in query strings, logs, or repository variables.
 The Worker can poll the PushPlus Open API every ten minutes for recent
 messages. In the default `failed-only` mode it queries each candidate's final
 PushPlus delivery status and recovers only messages explicitly marked failed.
+
 The `unhandled` mode instead treats the Worker's KV marker as authoritative: a
 matching history record that is old enough and has no local handled marker is
 processed even when PushPlus reports the channel as delivered. This covers a
-lost callback or a failure after PushPlus accepted the delivery.
+lost callback or a failure after PushPlus accepted delivery.
 
 PushPlus may omit messages that never reached its service, so recovery remains
 a best-effort backfill rather than a substitute for connectivity between the
@@ -248,11 +252,11 @@ run from replaying older account history.
 
 The default trigger runs at minutes 3, 13, 23, 33, 43, and 53. In
 `failed-only` mode, status `0`/`1` messages remain pending, status `2` messages
-are left to the realtime path, and only status `3` messages are recovered. In
-`unhandled` mode, upstream status is not queried; the Worker rechecks KV in the
-normal forwarding pipeline before delivery. Access keys are cached in memory
-until shortly before expiry and are refreshed once when an Open API call
-fails, keeping the polling loop bounded.
+are left to the realtime path, and only status `3` messages are recovered.
+
+In `unhandled` mode, upstream status is not queried; the Worker rechecks KV in
+the normal forwarding pipeline before delivery. Access keys are cached in memory
+until shortly before expiry and are refreshed once on an Open API failure.
 
 With alerts enabled, only a run that actually forwards at least one message
 sends a Telegram summary. Set `PUSHPLUS_RECOVERY_ALERT_ENABLED=false` to keep
@@ -289,10 +293,11 @@ retention window.
 
 Authenticated inbox reads share one raw KV snapshot for five seconds per Worker
 isolate and binding. Token checks and sender/time/limit filters run on every
-request. Local inbox writes invalidate the snapshot before and after storage I/O;
-failed scans are evicted. External writes may appear after this extra five-second
-window plus normal KV propagation. The cache performs no KV writes and does not
-cache authorization or delivery decisions.
+request.
+
+Local inbox writes invalidate the snapshot before and after storage I/O, and
+failed scans are evicted. External writes may appear after this five-second window
+plus normal KV propagation; the cache never caches auth or delivery decisions.
 
 SmsForwarder reuses one imported HMAC verification key for the current configured
 secret. Secret changes replace it immediately; every webhook still verifies its

@@ -1,25 +1,37 @@
 import {
-  PUSHPLUS_BASE_URL,
-  WORKFLOW_LEASED_PRESETS,
   buildTelegramText,
-  findInterceptRule,
   htmlToText,
-  interceptPresetRules,
   interceptShouldSilence,
   interceptShouldStore,
   isTruthy,
-  loadInterceptRules,
   messageSourceIds,
   parsePushPlusUpdateTime,
   parseSmsFields,
   pickField,
-  pushPlusAccessKeyRequest,
-  pushPlusUrl as pushPlusUrlWithBase,
   sha256Hex,
   splitTelegramText,
 } from './src/pipeline.js';
+import {
+  DEDUPE_KEY_PREFIX,
+  FORWARDED_TTL_SECONDS,
+  InterceptLeaseCoordinator,
+  authorizeInterceptLeaseRequest,
+  bearerToken,
+  findEffectiveInterceptRule,
+  inboxToken,
+  interceptLeaseCoordinator,
+  jsonResponse,
+  processInterceptLease,
+} from './src/intercept-lease.js';
+import { createPushPlusClient } from './src/pushplus-client.js';
+import {
+  DEFAULT_TELEGRAM_TIMEOUT_MS,
+  numberSetting as numberEnv,
+  sendTelegram,
+} from './src/telegram.js';
 
-const FORWARDED_TTL_SECONDS = 60 * 60 * 24 * 180;
+export { InterceptLeaseCoordinator };
+
 const INBOX_TTL_SECONDS = 60 * 60 * 6;
 const DEFAULT_CLEANUP_RETENTION_DAYS = 90;
 const DEFAULT_CLEANUP_PAGE_SIZE = 50;
@@ -32,168 +44,16 @@ const DEFAULT_RECOVERY_MAX_PAGES = 2;
 const DEFAULT_RECOVERY_MAX_MESSAGES = 20;
 const RECOVERY_CRON = '3,13,23,33,43,53 * * * *';
 const CLEANUP_CRON = '17 3 * * *';
-const PUSHPLUS_ACCESS_KEY_REFRESH_MARGIN_SECONDS = 5 * 60;
-const INTERCEPT_LEASE_STORAGE_PREFIX = 'lease:';
-const DEFAULT_INTERCEPT_LEASE_TTL_SECONDS = 60 * 60;
-const MAX_INTERCEPT_LEASE_TTL_SECONDS = 2 * 60 * 60;
 const DEFAULT_SMSFORWARDER_MAX_CLOCK_SKEW_SECONDS = 60 * 60;
-const DEFAULT_TELEGRAM_RETRY_ATTEMPTS = 3;
-const DEFAULT_TELEGRAM_RETRY_DELAY_MS = 500;
-const DEFAULT_TELEGRAM_TIMEOUT_MS = 8_000;
 const IGNORED_DEDUPE_TTL_SECONDS = 60 * 60 * 24 * 30;
-const DEDUPE_KEY_PREFIX = 'pushplus:';
-// Same shape the dedupe writer produces; the delivery object rejects anything
-// else so a caller cannot reserve a key the Worker never reads back.
-const DEDUPE_KEY_PATTERN = new RegExp(`^${DEDUPE_KEY_PREFIX}[0-9a-f]{64}$`);
-let pushPlusAccessKeyCache = null;
-
-function jsonResponse(body, status = 200) {
-  return new Response(JSON.stringify(body), {
-    status,
-    headers: { 'content-type': 'application/json; charset=utf-8' },
-  });
-}
-
-// The lease id and the preset both live in the storage key, so the writer and
-// the `/active` reader have to derive them the same way.
-function leaseStorageKey(preset, leaseId) {
-  return `${INTERCEPT_LEASE_STORAGE_PREFIX}${preset}:${leaseId}`;
-}
-
-function leasePreset(key) {
-  const suffix = String(key).slice(INTERCEPT_LEASE_STORAGE_PREFIX.length);
-  const separator = suffix.indexOf(':');
-  return separator === -1 ? '' : suffix.slice(0, separator);
-}
-
-export class InterceptLeaseCoordinator {
-  constructor(ctx, env) {
-    this.ctx = ctx;
-    this.env = env;
-    this.deliveryTail = Promise.resolve();
-  }
-
-  async deliver(request) {
-    const { keys, chunks } = await request.json();
-    if (!Array.isArray(keys) || !keys.length || keys.length > 4
-      || !keys.every(key => DEDUPE_KEY_PATTERN.test(key))
-      || !Array.isArray(chunks) || !chunks.length
-      || !chunks.every(chunk => typeof chunk === 'string' && chunk.length <= 4096)) {
-      return jsonResponse({ state: 'invalid' }, 400);
-    }
-    const storageKeys = [...new Set(keys)].map(key => `delivery:${key}`);
-    const now = Date.now();
-    const initial = { state: 'submitted', confirmedChunks: 0, totalChunks: chunks.length };
-    const claim = await this.ctx.storage.transaction(async txn => {
-      const records = await Promise.all(storageKeys.map(key => txn.get(key)));
-      const unresolved = records.find(record => record && record.state !== 'completed');
-      const completed = records.find(record => record?.state === 'completed' && record.expiresAt > now);
-      const value = unresolved || completed || initial;
-      for (const key of storageKeys) await txn.put(key, value);
-      return unresolved ? 'unknown' : completed ? 'duplicates' : 'claimed';
-    });
-    if (claim === 'unknown') return jsonResponse({ state: 'unknown' }, 409);
-    if (claim === 'duplicates') return jsonResponse({ state: 'duplicates' });
-
-    let confirmedChunks = 0;
-    const persist = async state => {
-      const record = { state, confirmedChunks, totalChunks: chunks.length };
-      if (state === 'completed') record.expiresAt = now + FORWARDED_TTL_SECONDS * 1000;
-      await this.ctx.storage.transaction(async txn => {
-        for (const key of storageKeys) await txn.put(key, record);
-      });
-    };
-    try {
-      // The durable reservation precedes external I/O. Never put fetch inside
-      // a storage transaction: retries of a transaction must not send messages.
-      for (const text of chunks) {
-        await sendTelegram({ env: this.env, text });
-        confirmedChunks += 1;
-        await persist('submitted');
-      }
-      await persist('completed');
-      return jsonResponse({ state: 'forwarded' });
-    } catch (error) {
-      const rejected = error instanceof TelegramDeliveryError && !error.uncertain && confirmedChunks === 0;
-      try {
-        if (rejected) {
-          await this.ctx.storage.transaction(async txn => {
-            await txn.delete(storageKeys);
-          });
-        } else {
-          await persist('unknown');
-        }
-      } catch {
-        // Even if recording the outcome fails, the pre-send reservation stays
-        // durable and blocks another send after this object is reconstructed.
-      }
-      return jsonResponse({ state: rejected ? 'rejected' : 'unknown' }, 503);
-    }
-  }
-
-  async pruneExpired(now = Date.now()) {
-    const leases = await this.ctx.storage.list({ prefix: INTERCEPT_LEASE_STORAGE_PREFIX });
-    const active = new Map();
-    const expired = [];
-    for (const [key, value] of leases) {
-      if (!Number(value?.expiresAt) || Number(value.expiresAt) <= now) expired.push(key);
-      else active.set(key, value);
-    }
-    if (expired.length) await this.ctx.storage.delete(expired);
-    return active;
-  }
-
-  async fetch(request) {
-    const url = new URL(request.url);
-    if (request.method === 'POST' && url.pathname === '/deliver') {
-      // In-process ordering is only an optimization; the durable claim above
-      // is the safety boundary across restarts and overlapping aliases.
-      const result = this.deliveryTail.then(() => this.deliver(request))
-        .catch(() => jsonResponse({ state: 'unavailable' }, 503));
-      this.deliveryTail = result.then(() => {});
-      return result;
-    }
-    const now = Date.now();
-    const leases = await this.pruneExpired(now);
-    if (request.method === 'GET' && url.pathname === '/active') {
-      const presets = new Set();
-      for (const key of leases.keys()) {
-        const preset = leasePreset(key);
-        if (WORKFLOW_LEASED_PRESETS.has(preset)) presets.add(preset);
-      }
-      return jsonResponse({ code: 200, presets: [...presets] });
-    }
-
-    const parsed = parseInterceptLeasePath(url.pathname);
-    if (!parsed) return jsonResponse({ code: 404, msg: 'not found' }, 404);
-    if (parsed.error) return jsonResponse({ code: 400, msg: parsed.error }, 400);
-    const key = leaseStorageKey(parsed.preset, parsed.leaseId);
-    if (request.method === 'PUT') {
-      const body = await request.json().catch(() => ({}));
-      const requestedTtl = body.ttlSeconds === undefined
-        ? DEFAULT_INTERCEPT_LEASE_TTL_SECONDS
-        : Number(body.ttlSeconds);
-      if (!Number.isFinite(requestedTtl) || requestedTtl < 60) {
-        return jsonResponse({ code: 400, msg: 'invalid ttlSeconds' }, 400);
-      }
-      const ttlSeconds = Math.min(Math.floor(requestedTtl), MAX_INTERCEPT_LEASE_TTL_SECONDS);
-      const expiresAtMs = now + ttlSeconds * 1000;
-      await this.ctx.storage.put(key, { expiresAt: expiresAtMs });
-      return jsonResponse({
-        code: 200,
-        msg: 'ok',
-        preset: parsed.preset,
-        active: true,
-        expiresAt: new Date(expiresAtMs).toISOString(),
-      });
-    }
-    if (request.method === 'DELETE') {
-      await this.ctx.storage.delete(key);
-      return jsonResponse({ code: 200, msg: 'ok', preset: parsed.preset, active: false });
-    }
-    return jsonResponse({ code: 405, msg: 'method not allowed' }, 405);
-  }
-}
+const pushPlus = createPushPlusClient();
+const {
+  deletePushPlusMessage,
+  fetchPushPlusDetail,
+  getPushPlusMessageResult,
+  listPushPlusMessages,
+  withPushPlusAccessKey,
+} = pushPlus;
 
 function pushPlusSuccessResponse() {
   return new Response('{"code": 200, "msg": "success"}', {
@@ -205,40 +65,6 @@ function pushPlusSuccessResponse() {
       'access-control-allow-headers': 'content-type, authorization',
     },
   });
-}
-
-function numberEnv(env, name, fallback, { min = 0, max = Number.MAX_SAFE_INTEGER } = {}) {
-  const raw = env[name];
-  if (raw === undefined || raw === null || raw === '') return fallback;
-  const parsed = Number(raw);
-  if (!Number.isFinite(parsed)) throw new Error(`Invalid numeric env ${name}: ${raw}`);
-  return Math.max(min, Math.min(Math.floor(parsed), max));
-}
-
-function interceptLeaseCoordinator(env, name = 'global') {
-  if (!env.INTERCEPT_LEASES) throw new Error('Missing Durable Object binding: INTERCEPT_LEASES');
-  if (typeof env.INTERCEPT_LEASES.getByName === 'function') {
-    return env.INTERCEPT_LEASES.getByName(name);
-  }
-  const id = env.INTERCEPT_LEASES.idFromName(name);
-  return env.INTERCEPT_LEASES.get(id);
-}
-
-async function activeInterceptLeasePresets(env) {
-  if (!env.INTERCEPT_LEASES) return [];
-  const response = await interceptLeaseCoordinator(env).fetch('https://intercept-leases.internal/active');
-  if (!response.ok) throw new Error(`Intercept lease lookup failed: HTTP ${response.status}`);
-  const data = await response.json();
-  return Array.isArray(data.presets) ? data.presets : [];
-}
-
-async function findEffectiveInterceptRule(message, env) {
-  const staticRule = findInterceptRule(message, loadInterceptRules(env));
-  if (staticRule) return { rule: staticRule, leased: false, presets: [] };
-  const leasedPresets = await activeInterceptLeasePresets(env);
-  if (!leasedPresets.length) return { rule: null, leased: false, presets: [] };
-  const leasedRules = leasedPresets.flatMap(preset => interceptPresetRules(preset, env, { leased: true }));
-  return { rule: findInterceptRule(message, leasedRules), leased: true, presets: leasedPresets };
 }
 
 async function dedupeKey(sourceId, env) {
@@ -263,115 +89,6 @@ async function putDedupeKeys(keys, value, env, expirationTtl = FORWARDED_TTL_SEC
 
 async function inboxKey(sourceId, receivedAt, env) {
   return `inbox:${String(receivedAt || Date.now()).padStart(13, '0')}:${await sha256Hex(`${env.STATE_SECRET || ''}:${sourceId}`)}`;
-}
-
-function pushPlusUrl(env, pathname) {
-  return pushPlusUrlWithBase(env.PUSHPLUS_BASE_URL || PUSHPLUS_BASE_URL, pathname);
-}
-
-async function fetchPushPlusDetail(env, shortCode) {
-  const url = pushPlusUrl(env, `/shortMessage/${encodeURIComponent(shortCode)}`);
-  const res = await fetch(url, { headers: { accept: 'text/html, text/plain;q=0.9, */*;q=0.8' } });
-  if (!res.ok) throw new Error(`PushPlus detail HTTP ${res.status}`);
-  return htmlToText(await res.text());
-}
-
-async function pushPlusJson(url, options = {}) {
-  const res = await fetch(url, options);
-  const text = await res.text();
-  let data = {};
-  try {
-    data = text ? JSON.parse(text) : {};
-  } catch {
-    data = { raw: text };
-  }
-  if (!res.ok) throw new Error(`PushPlus HTTP ${res.status} ${new URL(url).pathname}`);
-  if (data?.code !== 200) throw new Error(`PushPlus API failed: ${data?.msg || 'unknown error'}`);
-  return data;
-}
-
-async function getPushPlusAccessKey(env, forceRefresh = false) {
-  requireEnv(env, 'PUSHPLUS_TOKEN');
-  requireEnv(env, 'PUSHPLUS_SECRET_KEY');
-  const baseUrl = String(env.PUSHPLUS_BASE_URL || PUSHPLUS_BASE_URL);
-  if (
-    !forceRefresh
-    && pushPlusAccessKeyCache?.token === env.PUSHPLUS_TOKEN
-    && pushPlusAccessKeyCache?.baseUrl === baseUrl
-    && pushPlusAccessKeyCache?.expiresAt > Date.now()
-  ) {
-    return pushPlusAccessKeyCache.accessKey;
-  }
-  const request = pushPlusAccessKeyRequest(env.PUSHPLUS_BASE_URL, {
-    token: env.PUSHPLUS_TOKEN,
-    secretKey: env.PUSHPLUS_SECRET_KEY,
-  });
-  const data = await pushPlusJson(request.url, request.options);
-  const accessKey = data?.data?.accessKey;
-  if (!accessKey) throw new Error('PushPlus access key response missing accessKey');
-  const rawExpiresIn = Number(data?.data?.expiresIn);
-  const expiresIn = Number.isFinite(rawExpiresIn) && rawExpiresIn > 0
-    ? rawExpiresIn
-    : 2 * 60 * 60;
-  const cacheSeconds = Math.max(60, expiresIn - PUSHPLUS_ACCESS_KEY_REFRESH_MARGIN_SECONDS);
-  pushPlusAccessKeyCache = {
-    accessKey,
-    baseUrl,
-    expiresAt: Date.now() + cacheSeconds * 1000,
-    token: env.PUSHPLUS_TOKEN,
-  };
-  return accessKey;
-}
-
-async function withPushPlusAccessKey(env, operation) {
-  const accessKey = await getPushPlusAccessKey(env);
-  try {
-    return await operation(accessKey);
-  } catch (firstError) {
-    const refreshedAccessKey = await getPushPlusAccessKey(env, true);
-    try {
-      return await operation(refreshedAccessKey);
-    } catch (retryError) {
-      throw new Error(`${retryError.message}; retry after access-key refresh failed`, { cause: firstError });
-    }
-  }
-}
-
-async function listPushPlusMessages(env, accessKey, current, pageSize) {
-  const data = await pushPlusJson(pushPlusUrl(env, '/api/open/message/list'), {
-    method: 'POST',
-    headers: {
-      'content-type': 'application/json',
-      accept: 'application/json',
-      'access-key': accessKey,
-    },
-    body: JSON.stringify({ current, pageSize }),
-  });
-  return {
-    items: data?.data?.list || [],
-    pages: Number(data?.data?.pages || 0),
-  };
-}
-
-async function getPushPlusMessageResult(env, accessKey, shortCode) {
-  const url = pushPlusUrl(env, '/api/open/message/sendMessageResult');
-  url.searchParams.set('shortCode', shortCode);
-  const data = await pushPlusJson(url, {
-    headers: { accept: 'application/json', 'access-key': accessKey },
-  });
-  return {
-    errorMessage: String(data?.data?.errorMessage || ''),
-    status: Number(data?.data?.status),
-  };
-}
-
-async function deletePushPlusMessage(env, accessKey, shortCode) {
-  const url = pushPlusUrl(env, '/api/open/message/deleteMessage');
-  url.searchParams.set('shortCode', shortCode);
-  await pushPlusJson(url, {
-    method: 'DELETE',
-    headers: { accept: 'application/json', 'access-key': accessKey },
-  });
 }
 
 async function alreadyForwarded(shortCode, env) {
@@ -612,112 +329,14 @@ async function recoverPushPlusMessages(env) {
   };
 }
 
-function sleep(milliseconds) {
-  return new Promise(resolve => setTimeout(resolve, milliseconds));
-}
-
-class TelegramDeliveryError extends Error {
-  constructor(uncertain) {
-    super(uncertain ? 'Telegram delivery outcome unknown' : 'Telegram delivery rejected');
-    this.uncertain = uncertain;
-  }
-}
-
-async function sendTelegram({ env, text }) {
-  const url = `https://api.telegram.org/bot${env.TELEGRAM_BOT_TOKEN}/sendMessage`;
-  const attempts = numberEnv(env, 'TELEGRAM_RETRY_ATTEMPTS', DEFAULT_TELEGRAM_RETRY_ATTEMPTS, { min: 1, max: 4 });
-  const baseDelayMs = numberEnv(env, 'TELEGRAM_RETRY_DELAY_MS', DEFAULT_TELEGRAM_RETRY_DELAY_MS, { min: 0, max: 5_000 });
-  const timeoutMs = numberEnv(env, 'TELEGRAM_TIMEOUT_MS', DEFAULT_TELEGRAM_TIMEOUT_MS, { min: 1_000, max: 10_000 });
-
-  for (let attempt = 1; attempt <= attempts; attempt += 1) {
-    let res;
-    let data = {};
-    try {
-      res = await fetch(url, {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({
-          chat_id: env.TELEGRAM_CHAT_ID,
-          text,
-          parse_mode: 'HTML',
-          disable_web_page_preview: true,
-        }),
-        signal: AbortSignal.timeout(timeoutMs),
-      });
-      data = await res.json();
-    } catch {
-      // A transport failure or an unreadable body leaves the outcome unknown;
-      // retrying could duplicate a message Telegram already accepted.
-      throw new TelegramDeliveryError(true);
-    }
-    if (res.ok && data.ok === true && Number.isInteger(data.result?.message_id)) return data.result;
-    if (data.ok !== false) throw new TelegramDeliveryError(true);
-
-    const retryable = res.status === 408 || res.status === 429 || res.status >= 500;
-    if (!retryable) throw new TelegramDeliveryError(false);
-    if (attempt >= attempts) break;
-
-    const retryAfterMs = Number(data?.parameters?.retry_after || 0) * 1000;
-    const delayMs = Math.min(5_000, retryAfterMs || baseDelayMs * (2 ** (attempt - 1)));
-    if (delayMs > 0) await sleep(delayMs);
-  }
-  throw new TelegramDeliveryError(false);
-}
-
 function requireEnv(env, name) {
   if (!env[name]) throw new Error(`Missing env: ${name}`);
-}
-
-// One protected token gates the inbox, the diagnostics and the workflow
-// leases; the workflows that use them are configured with INBOX_TOKEN.
-function inboxToken(env) {
-  return env.INBOX_TOKEN || '';
-}
-
-function bearerToken(request) {
-  const auth = request.headers.get('authorization') || '';
-  return auth.toLowerCase().startsWith('bearer ') ? auth.slice(7).trim() : '';
 }
 
 function authorizeInboxRequest(request, env, url) {
   const expected = inboxToken(env);
   if (!expected) return false;
   return bearerToken(request) === expected || url.searchParams.get('token') === expected;
-}
-
-// Lease writes stay on the header so a token cannot end up in a URL that gets
-// logged by an intermediate proxy.
-function authorizeInterceptLeaseRequest(request, env) {
-  const expected = inboxToken(env);
-  return Boolean(expected) && bearerToken(request) === expected;
-}
-
-function parseInterceptLeasePath(pathname) {
-  const match = pathname.match(/^\/intercepts\/leases\/([^/]+)\/([^/]+)$/);
-  if (!match) return null;
-  const preset = decodeURIComponent(match[1]);
-  const leaseId = decodeURIComponent(match[2]);
-  if (!WORKFLOW_LEASED_PRESETS.has(preset)) return { error: 'unsupported preset' };
-  if (!/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/.test(leaseId)) return { error: 'invalid lease id' };
-  return { preset, leaseId };
-}
-
-async function processInterceptLease(request, env, url) {
-  if (!authorizeInterceptLeaseRequest(request, env)) {
-    return jsonResponse({ code: 401, msg: 'unauthorized' }, 401);
-  }
-  const parsed = parseInterceptLeasePath(url.pathname);
-  if (!parsed) return jsonResponse({ code: 404, msg: 'not found' }, 404);
-  if (parsed.error) return jsonResponse({ code: 400, msg: parsed.error }, 400);
-  const body = request.method === 'PUT' ? await request.text() : undefined;
-  return interceptLeaseCoordinator(env).fetch(new Request(
-    `https://intercept-leases.internal/intercepts/leases/${encodeURIComponent(parsed.preset)}/${encodeURIComponent(parsed.leaseId)}`,
-    {
-      method: request.method,
-      headers: body === undefined ? {} : { 'content-type': 'application/json' },
-      body,
-    },
-  ));
 }
 
 async function storeInboxMessage(env, message) {
